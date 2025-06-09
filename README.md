@@ -45,6 +45,9 @@ mvn clean package
 
 ### 3. サーバー起動
 サーバーを起動すると自動的に設定ファイルが生成されます
+```bash
+docker compose run --service-ports mc
+```
 
 ### 4. 設定（オプション）
 `plugins/MinecraftAgent/config.yml` を編集してエージェントの行動をカスタマイズ

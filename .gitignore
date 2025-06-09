@@ -51,3 +51,5 @@ Thumbs.db
 # Plugin specific
 plugins/MinecraftAgent/logs/
 plugins/MinecraftAgent/data.db
+
+data/

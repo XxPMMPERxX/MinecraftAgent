@@ -92,12 +92,12 @@
         </dependency>
         
         <!-- Pathfinding API -->
-        <dependency>
+        <!-- <dependency>
             <groupId>de.tr7zw</groupId>
             <artifactId>pathfinder-api</artifactId>
             <version>1.0.0</version>
             <scope>provided</scope>
-        </dependency>
+        </dependency> -->
         
         <!-- JSON Processing -->
         <dependency>

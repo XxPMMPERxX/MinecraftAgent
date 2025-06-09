@@ -286,7 +286,7 @@ public class SurvivalBehavior extends BaseBehavior {
             Material.CARROT,
             Material.POTATO,
             Material.COOKED_CHICKEN,
-            Material.COOKED_FISH
+            Material.COOKED_COD
         };
         
         for (Material food : foodItems) {
@@ -309,9 +309,9 @@ public class SurvivalBehavior extends BaseBehavior {
             PotionEffectType.POISON,
             PotionEffectType.WITHER,
             PotionEffectType.WEAKNESS,
-            PotionEffectType.SLOWNESS,
-            PotionEffectType.MINING_FATIGUE,
-            PotionEffectType.NAUSEA,
+            PotionEffectType.SLOW,
+            PotionEffectType.SLOW_DIGGING,
+            PotionEffectType.CONFUSION,
             PotionEffectType.BLINDNESS
         };
         
