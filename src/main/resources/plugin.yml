@@ -1,0 +1,31 @@
+name: MinecraftAgent
+version: '1.0.0'
+description: 完全自立型のMinecraft Javaエージェントプラグイン
+author: MinecraftAgent Team
+website: https://github.com/minecraft-agent
+main: com.minecraftagent.MinecraftAgentPlugin
+
+api-version: 1.20
+
+depend: []
+softdepend: [Citizens]
+
+commands:
+  agent:
+    description: エージェント管理コマンド
+    usage: /agent <start|stop|status|spawn|remove> [name]
+    permission: minecraftagent.admin
+    permission-message: このコマンドを使用する権限がありません
+
+permissions:
+  minecraftagent.*:
+    description: 全ての権限
+    children:
+      minecraftagent.admin: true
+      minecraftagent.user: true
+  minecraftagent.admin:
+    description: 管理者権限
+    default: op
+  minecraftagent.user:
+    description: 一般ユーザー権限
+    default: true
