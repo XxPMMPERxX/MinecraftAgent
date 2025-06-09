@@ -102,6 +102,20 @@ public class ConfigManager {
     }
     
     /**
+     * 建築行動が有効かどうか
+     */
+    public boolean isBuildingEnabled() {
+        return config.getBoolean("agent.default_behavior.building.enabled", true);
+    }
+    
+    /**
+     * 建築行動の優先度を取得
+     */
+    public int getBuildingPriority() {
+        return config.getInt("agent.default_behavior.building.priority", 70);
+    }
+    
+    /**
      * 戦闘が有効かどうか
      */
     public boolean isCombatEnabled() {

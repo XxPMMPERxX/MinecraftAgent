@@ -3,11 +3,13 @@ package com.minecraftagent.agent;
 import com.minecraftagent.MinecraftAgentPlugin;
 import com.minecraftagent.ai.BehaviorManager;
 import com.minecraftagent.ai.WorldKnowledge;
+import com.minecraftagent.display.AgentStatusDisplay;
 import com.minecraftagent.utils.Logger;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
+import org.bukkit.block.Block;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
@@ -30,6 +32,7 @@ public class MinecraftAgent {
     private Location homeLocation;
     private BehaviorManager behaviorManager;
     private WorldKnowledge worldKnowledge;
+    private AgentStatusDisplay statusDisplay;
     private BukkitTask mainTask;
     
     private boolean isActive;
@@ -61,6 +64,7 @@ public class MinecraftAgent {
         // サブシステム初期化
         this.worldKnowledge = new WorldKnowledge(this);
         this.behaviorManager = new BehaviorManager(this);
+        this.statusDisplay = new AgentStatusDisplay(this);
         
         logger.info("エージェント " + agentName + " を作成しました (ID: " + agentId + ")");
     }
@@ -80,6 +84,9 @@ public class MinecraftAgent {
             
             // 行動管理システム初期化
             behaviorManager.initialize();
+            
+            // ステータス表示開始
+            statusDisplay.startDisplay();
             
             // メインタスク開始
             startMainTask();
@@ -116,6 +123,11 @@ public class MinecraftAgent {
             behaviorManager.shutdown();
         }
         
+        // ステータス表示停止
+        if (statusDisplay != null) {
+            statusDisplay.stopDisplay();
+        }
+        
         // エンティティ削除
         if (entity != null && !entity.isDead()) {
             entity.remove();
@@ -133,8 +145,12 @@ public class MinecraftAgent {
             throw new IllegalStateException("スポーン地点のワールドが見つかりません");
         }
         
-        // Villagerエンティティとしてスポーン（NPCの代替）
-        Entity spawnedEntity = world.spawnEntity(homeLocation, EntityType.VILLAGER);
+        // 安全なスポーン位置を確保
+        Location safeLocation = findSafeSpawnLocation(homeLocation);
+        
+        // より制御しやすいZombie Villagerエンティティを使用
+        // 人間らしい見た目で攻撃的でない
+        Entity spawnedEntity = world.spawnEntity(safeLocation, EntityType.ZOMBIE_VILLAGER);
         
         if (spawnedEntity instanceof LivingEntity) {
             this.entity = (LivingEntity) spawnedEntity;
@@ -144,14 +160,81 @@ public class MinecraftAgent {
             entity.setCustomNameVisible(true);
             entity.setRemoveWhenFarAway(false);
             entity.setPersistent(true);
+            // AIを部分的に無効化（移動は自然に）
+            if (entity instanceof org.bukkit.entity.Mob) {
+                org.bukkit.entity.Mob mob = (org.bukkit.entity.Mob) entity;
+                mob.setAware(false); // 環境への反応を無効化
+            }
+            
+            // Zombie Villagerの場合の設定
+            if (entity instanceof org.bukkit.entity.ZombieVillager) {
+                org.bukkit.entity.ZombieVillager zombieVillager = (org.bukkit.entity.ZombieVillager) entity;
+                zombieVillager.setTarget(null); // ターゲット解除
+            }
             
             // 初期ステータス更新
             updateStatus();
             
-            logger.debug("エンティティをスポーンしました: " + agentName);
+            logger.debug("エンティティをスポーンしました: " + agentName + " at " + safeLocation);
         } else {
             throw new IllegalStateException("有効なLivingEntityをスポーンできませんでした");
         }
+    }
+    
+    /**
+     * 安全なスポーン位置を探す
+     */
+    private Location findSafeSpawnLocation(Location original) {
+        World world = original.getWorld();
+        int baseX = original.getBlockX();
+        int baseZ = original.getBlockZ();
+        
+        // 元の位置から検索開始
+        for (int radius = 0; radius <= 10; radius++) {
+            for (int x = -radius; x <= radius; x++) {
+                for (int z = -radius; z <= radius; z++) {
+                    if (Math.abs(x) == radius || Math.abs(z) == radius || radius == 0) {
+                        Location testLocation = new Location(world, baseX + x, 0, baseZ + z);
+                        Location safeLocation = getSafeLocationAt(testLocation);
+                        
+                        if (safeLocation != null) {
+                            return safeLocation;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 最悪の場合は高い位置に設定
+        return new Location(world, baseX, Math.max(original.getY(), 80), baseZ);
+    }
+    
+    /**
+     * 指定位置で安全なスポーン地点を取得
+     */
+    private Location getSafeLocationAt(Location location) {
+        World world = location.getWorld();
+        int x = location.getBlockX();
+        int z = location.getBlockZ();
+        
+        // 上から下に向かって安全な場所を探す
+        int maxY = Math.min(world.getHighestBlockYAt(x, z) + 5, world.getMaxHeight() - 1);
+        
+        for (int y = maxY; y > world.getMinHeight(); y--) {
+            Block ground = world.getBlockAt(x, y, z);
+            Block feet = world.getBlockAt(x, y + 1, z);
+            Block head = world.getBlockAt(x, y + 2, z);
+            
+            // 地面が固体で、足元と頭上が空いている
+            if (ground.getType().isSolid() && 
+                (feet.getType().isAir() || !feet.getType().isSolid()) &&
+                (head.getType().isAir() || !head.getType().isSolid())) {
+                
+                return new Location(world, x + 0.5, y + 1, z + 0.5);
+            }
+        }
+        
+        return null; // 安全な場所が見つからない
     }
     
     /**
@@ -246,6 +329,7 @@ public class MinecraftAgent {
     
     public BehaviorManager getBehaviorManager() { return behaviorManager; }
     public WorldKnowledge getWorldKnowledge() { return worldKnowledge; }
+    public AgentStatusDisplay getStatusDisplay() { return statusDisplay; }
     public MinecraftAgentPlugin getPlugin() { return plugin; }
     public Logger getLogger() { return logger; }
 }

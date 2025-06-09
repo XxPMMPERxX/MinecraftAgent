@@ -58,7 +58,11 @@ public class AgentCommand implements CommandExecutor {
                 break;
                 
             case "status":
-                showStatus(player);
+                if (args.length >= 2) {
+                    showAgentStatus(player, args[1]);
+                } else {
+                    showStatus(player);
+                }
                 break;
                 
             default:
@@ -75,6 +79,7 @@ public class AgentCommand implements CommandExecutor {
         player.sendMessage(ChatColor.YELLOW + "/agent remove <名前> - エージェントを削除");
         player.sendMessage(ChatColor.YELLOW + "/agent list - エージェント一覧");
         player.sendMessage(ChatColor.YELLOW + "/agent status - システム状態");
+        player.sendMessage(ChatColor.YELLOW + "/agent status <名前> - エージェント詳細情報");
     }
     
     private void spawnAgent(Player player, String agentName) {
@@ -111,5 +116,16 @@ public class AgentCommand implements CommandExecutor {
     private void showStatus(Player player) {
         player.sendMessage(ChatColor.GOLD + "=== システム状態 ===");
         player.sendMessage(ChatColor.YELLOW + plugin.getAgentManager().getStatistics());
+    }
+    
+    private void showAgentStatus(Player player, String agentName) {
+        MinecraftAgent agent = plugin.getAgentManager().getAgent(agentName);
+        if (agent == null) {
+            player.sendMessage(ChatColor.RED + "エージェント '" + agentName + "' が見つかりません");
+            return;
+        }
+        
+        // エージェントの詳細ステータスを表示
+        agent.getStatusDisplay().sendDetailedStatus(player);
     }
 }

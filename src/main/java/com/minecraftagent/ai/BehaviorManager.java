@@ -5,6 +5,7 @@ import com.minecraftagent.behaviors.BaseBehavior;
 import com.minecraftagent.behaviors.SurvivalBehavior;
 import com.minecraftagent.behaviors.ResourceGatheringBehavior;
 import com.minecraftagent.behaviors.ExplorationBehavior;
+import com.minecraftagent.behaviors.BuildingBehavior;
 import com.minecraftagent.utils.Logger;
 
 import java.util.ArrayList;
@@ -53,6 +54,11 @@ public class BehaviorManager {
         // 探索行動
         if (config.isExplorationEnabled()) {
             behaviors.add(new ExplorationBehavior(agent, config.getExplorationPriority()));
+        }
+        
+        // 建築行動
+        if (config.isBuildingEnabled()) {
+            behaviors.add(new BuildingBehavior(agent, config.getBuildingPriority()));
         }
         
         // 全ての行動を初期化

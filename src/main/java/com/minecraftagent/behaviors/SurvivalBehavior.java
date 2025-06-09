@@ -78,8 +78,12 @@ public class SurvivalBehavior extends BaseBehavior {
     protected void onUpdate() {
         LivingEntity entity = agent.getEntity();
         
+        // ステータス表示を更新
+        agent.getStatusDisplay().setBehavior("SurvivalBehavior");
+        
         // 1. 緊急回避（体力が非常に低い場合）
         if (entity.getHealth() <= fleeHealthThreshold) {
+            agent.getStatusDisplay().setAction("緊急回避中");
             flee();
             return;
         }
@@ -91,16 +95,19 @@ public class SurvivalBehavior extends BaseBehavior {
         
         // 3. 体力回復
         if (entity.getHealth() < healthThreshold) {
+            agent.getStatusDisplay().setAction("体力回復中");
             heal();
         }
         
         // 4. 食事
         if (needsFood()) {
+            agent.getStatusDisplay().setAction("食事中");
             eat();
         }
         
         // 5. 有害効果の解除
         if (hasHarmfulPotionEffects()) {
+            agent.getStatusDisplay().setAction("毒解除中");
             cureHarmfulEffects();
         }
     }
@@ -154,12 +161,16 @@ public class SurvivalBehavior extends BaseBehavior {
         
         // 非常に近い場合は逃走
         if (distance < 3.0 || entity.getHealth() <= fleeHealthThreshold) {
+            agent.getStatusDisplay().setAction("逃走中");
+            agent.getStatusDisplay().setTarget(currentThreat.getType().name());
             flee();
             return true;
         }
         
         // 自動防御が有効で、攻撃可能な場合
         if (autoDefendEnabled && distance < 8.0) {
+            agent.getStatusDisplay().setAction("戦闘中");
+            agent.getStatusDisplay().setTarget(currentThreat.getType().name());
             defend();
             return true;
         }
@@ -203,6 +214,7 @@ public class SurvivalBehavior extends BaseBehavior {
         moveToLocation(fleeTarget);
         
         logger.info("エージェント " + agent.getAgentName() + " が逃走しています");
+        agent.getStatusDisplay().setCustomStatus("🏃 逃走中");
     }
     
     /**
@@ -292,6 +304,7 @@ public class SurvivalBehavior extends BaseBehavior {
         for (Material food : foodItems) {
             if (useItem(food)) {
                 logger.debug("エージェント " + agent.getAgentName() + " が食事をしました");
+                agent.getStatusDisplay().setTarget(food.name());
                 return;
             }
         }
