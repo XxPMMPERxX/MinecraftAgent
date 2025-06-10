@@ -92,15 +92,26 @@ public class BehaviorManager {
         
         lastBehaviorCheck = currentTime;
         
+        // デバッグログ：BehaviorManagerが動作していることを確認
+        logger.debug("BehaviorManager.update() 実行中 - 利用可能な行動数: " + behaviors.size());
+        
         try {
             // 実行可能な行動を取得し、優先度でソート
             List<BaseBehavior> availableBehaviors = behaviors.stream()
-                    .filter(BaseBehavior::canExecute)
+                    .filter(behavior -> {
+                        boolean canExecute = behavior.canExecute();
+                        logger.debug("行動チェック: " + behavior.getClass().getSimpleName() + 
+                                   " - 実行可能: " + canExecute);
+                        return canExecute;
+                    })
                     .sorted(Comparator.comparingInt(BaseBehavior::getPriority).reversed())
                     .toList();
             
+            logger.debug("実行可能な行動数: " + availableBehaviors.size());
+            
             if (availableBehaviors.isEmpty()) {
                 // 実行可能な行動がない場合は待機
+                logger.debug("実行可能な行動がありません - 待機中");
                 if (currentBehavior != null) {
                     stopCurrentBehavior();
                 }
@@ -109,6 +120,8 @@ public class BehaviorManager {
             
             // 最高優先度の行動を選択
             BaseBehavior selectedBehavior = availableBehaviors.get(0);
+            logger.debug("選択された行動: " + selectedBehavior.getClass().getSimpleName() + 
+                        " (優先度: " + selectedBehavior.getPriority() + ")");
             
             // 行動切り替えが必要かチェック
             if (currentBehavior != selectedBehavior) {

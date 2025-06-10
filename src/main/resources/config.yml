@@ -1,0 +1,71 @@
+# MinecraftAgent プラグイン設定ファイル
+
+# エージェント設定
+agent:
+  # 最大エージェント数
+  max_agents: 10
+  
+  # デフォルト行動設定
+  default_behavior:
+    # 生存行動
+    survival:
+      enabled: true
+      priority: 100
+      health_threshold: 10  # 体力閾値
+      food_threshold: 10    # 満腹度閾値
+    
+    # 資源収集行動
+    resource_gathering:
+      enabled: true
+      priority: 80
+      search_radius: 20     # 資源検索範囲
+      movement_speed: 0.21  # 移動速度（ブロック/tick）
+      mining_intervals: 1000 # 採掘間隔（ミリ秒）
+    
+    # 探索行動
+    exploration:
+      enabled: true
+      priority: 60
+      radius: 100           # 探索範囲
+      interval_seconds: 30  # 探索間隔（秒）
+    
+    # 建築行動
+    building:
+      enabled: true
+      priority: 70
+
+# 戦闘設定
+combat:
+  enabled: true
+  auto_defend: true         # 自動防御
+  flee_health: 5           # 逃走する体力閾値
+  attack_mobs: true        # モブ攻撃
+  attack_players: false    # プレイヤー攻撃
+
+# パフォーマンス設定
+performance:
+  task_interval: 20        # タスク実行間隔（ティック）
+  chunk_radius: 3          # チャンク読み込み範囲
+  entity_search_radius: 16 # エンティティ検索範囲
+
+# データベース設定
+database:
+  type: sqlite             # データベースタイプ (sqlite / mysql)
+  
+  # SQLite設定
+  sqlite:
+    file: "plugins/MinecraftAgent/data.db"
+  
+  # MySQL設定（使用時のみ）
+  mysql:
+    host: "localhost"
+    port: 3306
+    database: "minecraft_agent"
+    username: "root"
+    password: ""
+
+# ログ設定
+logging:
+  level: "INFO"           # ログレベル (DEBUG, INFO, WARN, ERROR)
+  file: true              # ファイル出力
+  console: true           # コンソール出力

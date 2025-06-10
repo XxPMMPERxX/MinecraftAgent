@@ -7,7 +7,6 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.entity.LivingEntity;
-import org.bukkit.util.Vector;
 
 import java.util.Random;
 
@@ -32,7 +31,7 @@ public class ExplorationBehavior extends BaseBehavior {
     @Override
     public boolean canExecute() {
         if (!isAgentValid()) {
-            logger.debug("ExplorationBehavior: エージェントが無効");
+            logger.info("ExplorationBehavior: エージェントが無効");
             return false;
         }
         
@@ -160,93 +159,20 @@ public class ExplorationBehavior extends BaseBehavior {
     }
     
     /**
-     * ターゲットに向かってシンプルに移動（ぐるぐる回らない）
+     * ターゲットに向かってシンプルに移動（MovementUtils使用）
      */
     private void moveTowardsTargetSimple(LivingEntity entity, Location currentLocation) {
         if (targetLocation == null) return;
         
-        Vector direction = targetLocation.toVector().subtract(currentLocation.toVector());
-        double distance = direction.length();
+        // MovementUtilsを使用してシンプルな移動
+        boolean reachedTarget = com.minecraftagent.utils.MovementUtils.walkTowards(entity, targetLocation, 0.4);
         
-        if (distance > 0.5) {
-            direction.normalize();
-            
-            // 直線的な移動で、小さなステップ
-            Location newLocation = currentLocation.clone();
-            double moveDistance = Math.min(1.0, distance); // 1ブロックずつ移動
-            newLocation.add(direction.multiply(moveDistance));
-            
-            // 安全な地面の高さに調整
-            newLocation.setY(getGroundLevel(newLocation));
-            
-            // エンティティの向きを設定（移動方向に向ける）
-            float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
-            newLocation.setYaw(yaw);
-            newLocation.setPitch(0);
-            
-            // 移動先が安全かチェック
-            if (isSafeToMoveTo(newLocation)) {
-                entity.teleport(newLocation);
-            } else {
-                // 移動できない場合は新しいターゲットを生成
-                generateNewTarget();
-            }
+        if (reachedTarget) {
+            // ターゲットに到達した場合は新しいターゲットを生成
+            generateNewTarget();
         }
     }
     
-    /**
-     * 移動先が安全かチェック
-     */
-    private boolean isSafeToMoveTo(Location location) {
-        if (location == null || location.getWorld() == null) return false;
-        
-        Block feet = location.getBlock();
-        Block head = location.getWorld().getBlockAt(location.getBlockX(), location.getBlockY() + 1, location.getBlockZ());
-        Block ground = location.getWorld().getBlockAt(location.getBlockX(), location.getBlockY() - 1, location.getBlockZ());
-        
-        // 足元と頭上が空気で、地面が固体
-        boolean feetClear = feet.getType().isAir() || !feet.getType().isSolid();
-        boolean headClear = head.getType().isAir() || !head.getType().isSolid();
-        boolean groundSolid = ground.getType().isSolid();
-        
-        // 危険なブロックを回避
-        boolean notDangerous = feet.getType() != Material.LAVA && 
-                              feet.getType() != Material.FIRE &&
-                              head.getType() != Material.LAVA &&
-                              head.getType() != Material.FIRE;
-        
-        return feetClear && headClear && groundSolid && notDangerous;
-    }
-    
-    /**
-     * ターゲットに向かって移動（旧版 - 使用しない）
-     */
-    private void moveTowardsTarget(LivingEntity entity, Location currentLocation) {
-        Vector direction = targetLocation.toVector().subtract(currentLocation.toVector());
-        double distance = direction.length();
-        
-        if (distance > 0.5) {
-            direction.normalize();
-            
-            // より自然な移動のため、teleportを使用
-            Location newLocation = currentLocation.clone();
-            
-            // 移動距離を制限（1ブロック以下）
-            double moveDistance = Math.min(0.3, distance);
-            newLocation.add(direction.multiply(moveDistance));
-            
-            // 地面の高さに調整
-            newLocation.setY(getGroundLevel(newLocation));
-            
-            // エンティティの向きを設定
-            float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
-            newLocation.setYaw(yaw);
-            newLocation.setPitch(0);
-            
-            // テレポートで移動
-            entity.teleport(newLocation);
-        }
-    }
     
     /**
      * 安全な地面の高さを取得

@@ -160,17 +160,30 @@ public class MinecraftAgent {
             entity.setCustomNameVisible(true);
             entity.setRemoveWhenFarAway(false);
             entity.setPersistent(true);
-            // AIを部分的に制御（移動可能にするためsetAwareは無効化しない）
-            if (entity instanceof org.bukkit.entity.Mob) {
-                org.bukkit.entity.Mob mob = (org.bukkit.entity.Mob) entity;
-                // mob.setAware(false); // コメントアウト：移動を可能にするため
-                mob.setTarget(null); // ターゲットのみクリア
-            }
-            
-            // 村人の場合の設定
+            // 村人の自動行動のみ無効化（移動機能は残す）
             if (entity instanceof org.bukkit.entity.Villager) {
                 org.bukkit.entity.Villager villager = (org.bukkit.entity.Villager) entity;
-                villager.setTarget(null); // ターゲット解除
+                
+                // ターゲットとパスファインディングのクリア
+                villager.setTarget(null);
+                
+                // 村人の職業と取引を無効化（行動AI削減）
+                villager.setProfession(org.bukkit.entity.Villager.Profession.NONE);
+                villager.setVillagerType(org.bukkit.entity.Villager.Type.PLAINS);
+                
+                // 基本設定
+                villager.setCollidable(true);
+                villager.setGravity(true);
+                villager.setRemoveWhenFarAway(false);
+                villager.setPersistent(true);
+                
+                logger.info("村人設定完了（移動可能）: " + agentName);
+            }
+            
+            // Mobの場合のターゲットクリア（setAwareは使わない）
+            if (entity instanceof org.bukkit.entity.Mob) {
+                org.bukkit.entity.Mob mob = (org.bukkit.entity.Mob) entity;
+                mob.setTarget(null); // ターゲットのみクリア
             }
             
             // 初期ステータス更新
@@ -256,6 +269,9 @@ public class MinecraftAgent {
                     // ステータス更新
                     updateStatus();
                     
+                    // 村人の自動行動を定期的に抑制
+                    suppressVillagerAI();
+                    
                     // ワールド知識更新
                     worldKnowledge.update();
                     
@@ -288,6 +304,37 @@ public class MinecraftAgent {
         } else {
             this.health = 0;
             this.foodLevel = 0;
+        }
+    }
+    
+    /**
+     * 村人の自動AI行動を抑制
+     */
+    private void suppressVillagerAI() {
+        if (entity instanceof org.bukkit.entity.Villager) {
+            org.bukkit.entity.Villager villager = (org.bukkit.entity.Villager) entity;
+            
+            // ターゲットを定期的にクリア（村人が勝手に行動しないように）
+            if (villager.getTarget() != null) {
+                villager.setTarget(null);
+                logger.debug("村人のターゲットをクリアしました: " + agentName);
+            }
+            
+            // パスファインディング関連の処理はAPIに依存するためコメントアウト
+            // 代わりに位置を少し調整して自動移動を防ぐ
+            if (villager.hasAI()) {
+                // 現在位置から微小移動して自動パスファインディングをリセット
+                org.bukkit.Location currentLoc = villager.getLocation();
+                villager.teleport(currentLoc.add(0, 0.01, 0).subtract(0, 0.01, 0));
+                logger.debug("村人の自動移動をリセットしました: " + agentName);
+            }
+        }
+        
+        if (entity instanceof org.bukkit.entity.Mob) {
+            org.bukkit.entity.Mob mob = (org.bukkit.entity.Mob) entity;
+            if (mob.getTarget() != null) {
+                mob.setTarget(null);
+            }
         }
     }
     

@@ -25,6 +25,13 @@ public class ConfigManager {
     }
     
     /**
+     * 設定ファイルを取得
+     */
+    public FileConfiguration getConfig() {
+        return config;
+    }
+    
+    /**
      * 最大エージェント数を取得
      */
     public int getMaxAgents() {

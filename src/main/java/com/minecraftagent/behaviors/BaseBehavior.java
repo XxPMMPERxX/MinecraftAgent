@@ -183,9 +183,26 @@ public abstract class BaseBehavior {
      * エージェントが有効かどうかをチェック
      */
     protected boolean isAgentValid() {
-        return agent != null && 
-               agent.isActive() && 
-               agent.getEntity() != null && 
-               !agent.getEntity().isDead();
+        if (agent == null) {
+            logger.debug("isAgentValid: agent is null");
+            return false;
+        }
+        
+        if (!agent.isActive()) {
+            logger.debug("isAgentValid: agent is not active");
+            return false;
+        }
+        
+        if (agent.getEntity() == null) {
+            logger.debug("isAgentValid: entity is null");
+            return false;
+        }
+        
+        if (agent.getEntity().isDead()) {
+            logger.debug("isAgentValid: entity is dead");
+            return false;
+        }
+        
+        return true;
     }
 }

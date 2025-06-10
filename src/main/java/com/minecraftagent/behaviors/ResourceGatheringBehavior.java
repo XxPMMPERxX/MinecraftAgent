@@ -2,16 +2,15 @@ package com.minecraftagent.behaviors;
 
 import com.minecraftagent.agent.MinecraftAgent;
 import com.minecraftagent.utils.BlockUtils;
-import com.minecraftagent.utils.MovementUtils;
 
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Particle;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.inventory.ItemStack;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -32,16 +31,16 @@ public class ResourceGatheringBehavior extends BaseBehavior {
     private int movementStepCount;
     private static final int MOVEMENT_STEP_INTERVAL_MS = 200; // 200ms毎に移動ステップ実行
     
-    // 収集優先度の高い資源
+    // 収集優先度の高い資源（地上優先）
     private final Material[] priorityResources = {
-        Material.DIAMOND_ORE,
-        Material.IRON_ORE,
-        Material.GOLD_ORE,
-        Material.COAL_ORE,
         Material.OAK_LOG,
         Material.STONE,
         Material.COBBLESTONE,
-        Material.DIRT
+        Material.DIRT,
+        Material.COAL_ORE,
+        Material.IRON_ORE,
+        Material.GOLD_ORE,
+        Material.DIAMOND_ORE
     };
     
     public ResourceGatheringBehavior(MinecraftAgent agent, int priority) {
@@ -55,7 +54,7 @@ public class ResourceGatheringBehavior extends BaseBehavior {
     @Override
     public boolean canExecute() {
         if (!isAgentValid()) {
-            logger.debug("ResourceGatheringBehavior: エージェントが無効");
+            logger.info("ResourceGatheringBehavior: エージェントが無効");
             return false;
         }
         
@@ -120,8 +119,9 @@ public class ResourceGatheringBehavior extends BaseBehavior {
             return;
         }
         
-        // 1秒に1回だけアクション
-        if (currentTime - lastGatherAction < 1000) {
+        // 設定に基づく間隔でアクション
+        int miningInterval = agent.getPlugin().getConfigManager().getConfig().getInt("agent.default_behavior.resource_gathering.mining_intervals", 1000);
+        if (currentTime - lastGatherAction < miningInterval) {
             return;
         }
         lastGatherAction = currentTime;
@@ -137,26 +137,28 @@ public class ResourceGatheringBehavior extends BaseBehavior {
             Location agentLocation = entity.getLocation();
             Location targetLocation = targetBlock.getLocation();
             
+            // ターゲットブロックをハイライト表示
+            highlightTargetBlock(targetBlock);
+            
+            // エージェントからターゲットまでのロープ（線）を表示
+            drawRopeToTarget(agentLocation, targetLocation);
+            
             // 座標差分を計算
             updateCoordinateDifference(agentLocation, targetLocation);
             
-            // 採掘可能な距離をチェック（直線距離で5ブロック以内）
+            // 採掘可能な距離をチェック（シンプル版）
             double distance = agentLocation.distance(targetLocation);
             
-            if (distance > 5.0) {
-                // 遠すぎる場合は継続的移動を開始
+            if (distance > 4.0) {
+                // 遠すぎる場合は段階的に移動（テレポートを避ける）
                 agent.getStatusDisplay().setAction("ターゲットに接近中");
-                startContinuousMovement(targetLocation);
-            } else if (canMineFromPosition(agentLocation, targetLocation)) {
-                // 採掘可能な位置にいる場合は採掘開始
+                
+                // より小さなステップで移動
+                moveTowardsTargetGradually(entity, agentLocation, targetLocation);
+                
+            } else if (distance <= 4.0) {
+                // 採掘可能距離内にいる場合は採掘開始
                 startMining();
-            } else {
-                // 採掘不可能な位置にいる場合はプレイヤーのように道を作る
-                agent.getStatusDisplay().setAction("地下鉱石への掘削中");
-                logger.info("★掘削ルート構築開始: " + targetBlock.getType() + " at " + targetLocation);
-                logger.info("★エージェント位置: " + agentLocation);
-                logger.info("★距離: " + String.format("%.2f", distance));
-                createPathToTarget(entity, agentLocation, targetLocation);
             }
         }
     }
@@ -185,31 +187,38 @@ public class ResourceGatheringBehavior extends BaseBehavior {
      */
     private boolean hasNeededResources() {
         Location location = agent.getEntity().getLocation();
-        List<Block> nearbyBlocks = BlockUtils.findNearbyBlocks(location, 20, priorityResources); // 10→20ブロックに拡大
-        logger.debug("ResourceGatheringBehavior: 20ブロック範囲で見つかった資源数=" + nearbyBlocks.size());
+        int searchRadius = agent.getPlugin().getConfigManager().getConfig().getInt("agent.default_behavior.resource_gathering.search_radius", 20);
+        List<Block> nearbyBlocks = BlockUtils.findNearbyBlocks(location, searchRadius, priorityResources);
+        logger.debug("ResourceGatheringBehavior: " + searchRadius + "ブロック範囲で見つかった資源数=" + nearbyBlocks.size());
         return !nearbyBlocks.isEmpty();
     }
     
     /**
-     * 新しいターゲットを探す
+     * 新しいターゲットを探す（地上優先）
      */
     private void findNewTarget() {
         LivingEntity entity = agent.getEntity();
         Location location = entity.getLocation();
         
-        // 優先度順に資源を探す（地下鉱石も含めて範囲を拡大）
+        // 地上レベル優先の検索
+        int searchRadius = agent.getPlugin().getConfigManager().getConfig().getInt("agent.default_behavior.resource_gathering.search_radius", 15);
+        
         for (Material material : priorityResources) {
-            // 地下鉱石のために検索範囲を拡大（20ブロック）
-            List<Block> blocks = BlockUtils.findNearbyBlocks(location, 20, material);
+            List<Block> blocks = BlockUtils.findNearbyBlocks(location, searchRadius, material);
             
             if (!blocks.isEmpty()) {
-                // 最も近いブロックを選択
+                // 地上に近いブロックを優先選択
                 Block closest = blocks.stream()
                     .filter(BlockUtils::canMineBlock)
-                    .min((b1, b2) -> Double.compare(
-                        location.distance(b1.getLocation()),
-                        location.distance(b2.getLocation())
-                    ))
+                    .filter(block -> {
+                        double heightDiff = block.getLocation().getY() - location.getY();
+                        return heightDiff >= -3.0; // 3ブロック以下の地下なら OK
+                    })
+                    .min((b1, b2) -> {
+                        double dist1 = location.distance(b1.getLocation());
+                        double dist2 = location.distance(b2.getLocation());
+                        return Double.compare(dist1, dist2);
+                    })
                     .orElse(null);
                 
                 if (closest != null) {
@@ -217,15 +226,9 @@ public class ResourceGatheringBehavior extends BaseBehavior {
                     double distance = location.distance(closest.getLocation());
                     double heightDiff = closest.getLocation().getY() - location.getY();
                     
-                    logger.debug("新しいターゲットを発見: " + material + 
-                               " at " + closest.getLocation() + 
+                    logger.debug("新しいターゲット発見: " + material + 
                                " (距離:" + String.format("%.1f", distance) + 
                                ", 高度差:" + String.format("%.1f", heightDiff) + ")");
-                    
-                    // 地下鉱石の場合は特別なログ出力
-                    if (heightDiff < -2) {
-                        logger.info("地下鉱石を発見: " + material + " - 掘削が必要");
-                    }
                     return;
                 }
             }
@@ -244,27 +247,121 @@ public class ResourceGatheringBehavior extends BaseBehavior {
     }
     
     /**
-     * ターゲットに向かって安全に移動
+     * ターゲットに向かって段階的に移動（テレポートを避ける）
      */
-    private void moveTowardsTarget() {
-        LivingEntity entity = agent.getEntity();
-        Location current = entity.getLocation();
-        Location target = targetBlock.getLocation().add(0.5, 0, 0.5); // ブロックの中央
+    private void moveTowardsTargetGradually(LivingEntity entity, Location current, Location target) {
+        // 方向ベクトルを計算
+        org.bukkit.util.Vector direction = target.toVector().subtract(current.toVector());
+        double distance = direction.length();
         
-        org.bukkit.util.Vector direction = target.toVector().subtract(current.toVector()).normalize();
-        Location newLocation = current.clone().add(direction.multiply(0.3)); // より小さな移動距離
+        if (distance < 0.5) return; // 十分近い場合は移動しない
         
-        // 安全な高さに調整
-        newLocation.setY(getSafeGroundLevel(newLocation));
+        direction.normalize();
+        
+        // 非常に小さなステップで移動（0.3ブロック以下）
+        double stepSize = Math.min(0.3, distance * 0.1); // 距離の10%、最大0.3ブロック
+        Location nextLocation = current.clone().add(direction.multiply(stepSize));
+        
+        // Y座標の変更を最小限に抑制
+        double targetY = target.getY();
+        double currentY = current.getY();
+        double heightDiff = targetY - currentY;
+        
+        // 高度差が小さい場合は現在の高さを維持
+        if (Math.abs(heightDiff) < 3.0) {
+            // 現在の高さ付近で安全な地面を探す
+            nextLocation.setY(findSafeYNearCurrent(nextLocation, current));
+        } else {
+            // 大きな高度差がある場合は段階的に変更
+            double yStep = Math.signum(heightDiff) * Math.min(0.5, Math.abs(heightDiff) * 0.1);
+            nextLocation.setY(current.getY() + yStep);
+        }
         
         // 移動先が安全かチェック
-        if (isSafeLocation(newLocation)) {
+        if (isSafeLocationForMovement(nextLocation)) {
+            // 向きを設定
             float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
-            newLocation.setYaw(yaw);
+            nextLocation.setYaw(yaw);
+            nextLocation.setPitch(0);
             
-            entity.teleport(newLocation);
+            // teleportで移動（小さなステップなので自然に見える）
+            entity.teleport(nextLocation);
+            
+            logger.debug("段階的移動: " + String.format("(%.2f, %.2f, %.2f) → (%.2f, %.2f, %.2f), ステップ=%.2f",
+                        current.getX(), current.getY(), current.getZ(),
+                        nextLocation.getX(), nextLocation.getY(), nextLocation.getZ(),
+                        stepSize));
+        } else {
+            logger.debug("段階的移動: 移動先が安全でないためスキップ");
         }
     }
+    
+    /**
+     * 現在位置付近で安全なY座標を見つける
+     */
+    private double findSafeYNearCurrent(Location location, Location currentPosition) {
+        World world = location.getWorld();
+        if (world == null) return currentPosition.getY();
+        
+        int x = location.getBlockX();
+        int z = location.getBlockZ();
+        int currentY = currentPosition.getBlockY();
+        
+        // 現在位置の±2ブロック範囲で安全な地面を探す
+        for (int offset = 0; offset <= 2; offset++) {
+            // まず下方向、次に上方向
+            for (int direction : new int[]{-1, 1}) {
+                int checkY = currentY + (direction * offset);
+                if (checkY < world.getMinHeight() || checkY > world.getMaxHeight() - 2) continue;
+                
+                Block ground = world.getBlockAt(x, checkY, z);
+                Block feet = world.getBlockAt(x, checkY + 1, z);
+                Block head = world.getBlockAt(x, checkY + 2, z);
+                
+                // 地面が固体で、足元と頭上が空気
+                if (ground.getType().isSolid() && 
+                    !ground.getType().equals(Material.LAVA) &&
+                    feet.getType().isAir() &&
+                    head.getType().isAir()) {
+                    return checkY + 1.0; // ブロックの上に立つ
+                }
+            }
+        }
+        
+        // 見つからない場合は現在の高さを維持
+        return currentPosition.getY();
+    }
+    
+    /**
+     * 移動用の安全性チェック（より緩和された条件）
+     */
+    private boolean isSafeLocationForMovement(Location location) {
+        if (location == null || location.getWorld() == null) return false;
+        
+        World world = location.getWorld();
+        Block feet = world.getBlockAt(location);
+        Block head = world.getBlockAt(location.getBlockX(), location.getBlockY() + 1, location.getBlockZ());
+        
+        // 足元と頭上が空気、または通過可能
+        boolean feetSafe = feet.getType().isAir() || 
+                          feet.getType() == Material.WATER ||
+                          feet.getType() == Material.TALL_GRASS ||
+                          feet.getType() == Material.GRASS;
+        
+        boolean headSafe = head.getType().isAir() ||
+                          head.getType() == Material.WATER ||
+                          head.getType() == Material.TALL_GRASS ||
+                          head.getType() == Material.GRASS;
+        
+        // 危険なブロックは避ける
+        boolean notDangerous = feet.getType() != Material.LAVA && 
+                              feet.getType() != Material.FIRE &&
+                              head.getType() != Material.LAVA &&
+                              head.getType() != Material.FIRE;
+        
+        return feetSafe && headSafe && notDangerous;
+    }
+    
     
     /**
      * 安全な地面の高さを取得
@@ -296,6 +393,53 @@ public class ResourceGatheringBehavior extends BaseBehavior {
         
         return (feet.getType().isAir() || !feet.getType().isSolid()) &&
                (head.getType().isAir() || !head.getType().isSolid());
+    }
+    
+    /**
+     * 地下移動での安全性をチェック（通常より緩和された条件）
+     */
+    private boolean canMoveUnderground(Location location) {
+        Block feet = location.getBlock();
+        Block head = location.getWorld().getBlockAt(location.getBlockX(), location.getBlockY() + 1, location.getBlockZ());
+        
+        // 地下では溶岩と水を避ければOK（空気でなくても掘削できれば通れる）
+        boolean feetSafe = feet.getType().isAir() || 
+                          (!feet.getType().equals(Material.LAVA) && 
+                           !feet.getType().equals(Material.WATER) && 
+                           feet.getType() != Material.BEDROCK);
+        
+        boolean headSafe = head.getType().isAir() || 
+                          (!head.getType().equals(Material.LAVA) && 
+                           !head.getType().equals(Material.WATER) && 
+                           head.getType() != Material.BEDROCK);
+        
+        return feetSafe && headSafe;
+    }
+    
+    /**
+     * 上向き移動での安全性をチェック（掘削・建築を前提とした条件）
+     */
+    private boolean canMoveUpward(Location location) {
+        Block feet = location.getBlock();
+        Block head = location.getWorld().getBlockAt(location.getBlockX(), location.getBlockY() + 1, location.getBlockZ());
+        
+        // 上向き移動では足場があるかチェック
+        Block ground = location.getWorld().getBlockAt(location.getBlockX(), location.getBlockY() - 1, location.getBlockZ());
+        
+        // 足場が固体で、足元と頭が通行可能（または掘削可能）
+        boolean hasFooting = ground.getType().isSolid();
+        
+        boolean feetPassable = feet.getType().isAir() || 
+                              BlockUtils.canMineBlock(feet) ||
+                              (!feet.getType().equals(Material.LAVA) && 
+                               !feet.getType().equals(Material.WATER));
+        
+        boolean headPassable = head.getType().isAir() || 
+                              BlockUtils.canMineBlock(head) ||
+                              (!head.getType().equals(Material.LAVA) && 
+                               !head.getType().equals(Material.WATER));
+        
+        return hasFooting && feetPassable && headPassable;
     }
     
     
@@ -397,32 +541,78 @@ public class ResourceGatheringBehavior extends BaseBehavior {
         org.bukkit.util.Vector direction = target.toVector().subtract(current.toVector()).normalize();
         Location nextStep = current.clone().add(direction.multiply(0.8)); // 0.8ブロックずつ移動
         
-        // 安全な高さに調整
-        nextStep.setY(getSafeGroundLevel(nextStep));
+        // 高度差による移動方法の選択
+        double heightDiff = target.getY() - current.getY();
         
-        // 移動先が安全かチェック
-        if (isSafeLocation(nextStep)) {
+        if (heightDiff < -2.0) {
+            // 地下向き移動：ターゲット方向のY座標をそのまま使用
+            // nextStepのYはそのまま（direction.multiplyで計算済み）
+        } else if (heightDiff > 2.0) {
+            // 上向き移動：ターゲット方向のY座標をそのまま使用して登攀
+            // nextStepのYはそのまま（direction.multiplyで計算済み）
+        } else {
+            // 水平移動：安全な地面レベルに調整
+            nextStep.setY(getSafeGroundLevel(nextStep));
+        }
+        
+        logger.debug("★移動ステップ: 現在Y=" + String.format("%.1f", current.getY()) + 
+                    ", 次Y=" + String.format("%.1f", nextStep.getY()) + 
+                    ", ターゲットY=" + String.format("%.1f", target.getY()) + 
+                    ", 高度差=" + String.format("%.1f", heightDiff));
+        
+        // 移動予定パスと障害物を表示
+        showMovementPath(current, nextStep);
+        highlightMiningBlocks(nextStep);
+        
+        // まず障害物を採掘
+        mineObstaclesInPath(entity, current, nextStep);
+        
+        // 移動先が安全かチェック（移動タイプに応じて判定）
+        boolean canMove;
+        if (heightDiff < -2.0) {
+            // 地下移動：緩和された条件
+            canMove = canMoveUnderground(nextStep);
+        } else if (heightDiff > 2.0) {
+            // 上向き移動：緩和された条件（掘削可能なら移動可能）
+            canMove = canMoveUpward(nextStep);
+        } else {
+            // 水平移動：通常の条件
+            canMove = isSafeLocation(nextStep);
+        }
+        
+        if (canMove) {
             // 向きを設定
             float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
             nextStep.setYaw(yaw);
             nextStep.setPitch(0);
             
-            entity.teleport(nextStep);
+            moveEntityNaturally(entity, current, nextStep);
+            logger.info("★移動ステップ実行: " + String.format("(%.1f, %.1f, %.1f) → (%.1f, %.1f, %.1f)", 
+                       current.getX(), current.getY(), current.getZ(),
+                       nextStep.getX(), nextStep.getY(), nextStep.getZ()));
         } else {
-            // 障害物がある場合は採掘して道を作る
-            if (mineObstaclesInPath(entity, current, nextStep)) {
-                // 採掘成功後に移動を試す
-                if (isSafeLocation(nextStep)) {
-                    float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
-                    nextStep.setYaw(yaw);
-                    nextStep.setPitch(0);
-                    entity.teleport(nextStep);
-                } else {
-                    // まだ障害物がある場合は代替経路を試す
-                    tryAlternativeMovementStep(entity, current, target);
-                }
+            // 移動できない場合は更に掘削
+            logger.info("★移動先が安全でない - 追加掘削を実行");
+            digBlocksAtLocation(nextStep);
+            
+            // 掘削後再度移動を試す
+            boolean canMoveAfterDig;
+            if (heightDiff < -2.0) {
+                canMoveAfterDig = canMoveUnderground(nextStep);
+            } else if (heightDiff > 2.0) {
+                canMoveAfterDig = canMoveUpward(nextStep);
             } else {
-                // 採掘できない場合は代替経路を試す
+                canMoveAfterDig = isSafeLocation(nextStep);
+            }
+            
+            if (canMoveAfterDig) {
+                float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
+                nextStep.setYaw(yaw);
+                nextStep.setPitch(0);
+                moveEntityNaturally(entity, current, nextStep);
+                logger.info("★追加掘削後移動成功");
+            } else {
+                // 代替経路を試す
                 tryAlternativeMovementStep(entity, current, target);
             }
         }
@@ -458,6 +648,32 @@ public class ResourceGatheringBehavior extends BaseBehavior {
             }
         }
         
+        // より積極的に - 移動方向の前方1ブロックも予め掘削
+        org.bukkit.util.Vector direction = to.toVector().subtract(from.toVector()).normalize();
+        Location aheadLocation = to.clone().add(direction.multiply(1.0));
+        
+        Block aheadFootBlock = aheadLocation.getBlock();
+        Block aheadHeadBlock = aheadLocation.getWorld().getBlockAt(
+            aheadLocation.getBlockX(), aheadLocation.getBlockY() + 1, aheadLocation.getBlockZ());
+        
+        if (aheadFootBlock.getType().isSolid() && BlockUtils.canMineBlock(aheadFootBlock)) {
+            logger.info("★前方予掘削: " + aheadFootBlock.getType() + " at " + aheadFootBlock.getLocation());
+            boolean success = BlockUtils.mineBlock(agent, aheadFootBlock);
+            if (success) {
+                minedSomething = true;
+                logger.info("★前方予掘削成功: " + aheadFootBlock.getType());
+            }
+        }
+        
+        if (aheadHeadBlock.getType().isSolid() && BlockUtils.canMineBlock(aheadHeadBlock)) {
+            logger.info("★前方頭上予掘削: " + aheadHeadBlock.getType() + " at " + aheadHeadBlock.getLocation());
+            boolean success = BlockUtils.mineBlock(agent, aheadHeadBlock);
+            if (success) {
+                minedSomething = true;
+                logger.info("★前方頭上予掘削成功: " + aheadHeadBlock.getType());
+            }
+        }
+        
         return minedSomething;
     }
     
@@ -484,7 +700,7 @@ public class ResourceGatheringBehavior extends BaseBehavior {
                 nextStep.setYaw(yaw);
                 nextStep.setPitch(0);
                 
-                entity.teleport(nextStep);
+                moveEntityNaturally(entity, current, nextStep);
                 return;
             } else {
                 // 代替経路でも障害物がある場合は採掘を試す
@@ -493,7 +709,7 @@ public class ResourceGatheringBehavior extends BaseBehavior {
                         float yaw = (float) Math.toDegrees(Math.atan2(-alternativeDirection.getX(), alternativeDirection.getZ()));
                         nextStep.setYaw(yaw);
                         nextStep.setPitch(0);
-                        entity.teleport(nextStep);
+                        moveEntityNaturally(entity, current, nextStep);
                         return;
                     }
                 }
@@ -503,86 +719,17 @@ public class ResourceGatheringBehavior extends BaseBehavior {
         // どの方向も無理な場合は上に移動を試す（上の障害物も採掘）
         Location upStep = current.clone().add(0, 1, 0);
         if (isSafeLocation(upStep)) {
-            entity.teleport(upStep);
+            moveEntityNaturally(entity, current, upStep);
         } else {
             // 上方向の障害物も採掘を試す
             if (mineObstaclesInPath(entity, current, upStep)) {
                 if (isSafeLocation(upStep)) {
-                    entity.teleport(upStep);
+                    moveEntityNaturally(entity, current, upStep);
                 }
             }
         }
     }
     
-    /**
-     * ターゲットに向かって自然に移動（プレイヤーのような小さなステップで）
-     */
-    private void moveTowardsTarget(LivingEntity entity, Location target) {
-        if (entity == null || target == null) return;
-        
-        Location current = entity.getLocation();
-        double distance = current.distance(target);
-        
-        if (distance < 2.0) {
-            return; // 十分近い
-        }
-        
-        // 方向を計算（小さなステップで自然に移動）
-        org.bukkit.util.Vector direction = target.toVector().subtract(current.toVector()).normalize();
-        Location nextStep = current.clone().add(direction.multiply(1.0)); // 1ブロックずつ移動
-        
-        // 安全な高さに調整
-        nextStep.setY(getSafeGroundLevel(nextStep));
-        
-        // 移動先が安全かチェック
-        if (isSafeLocation(nextStep)) {
-            // 向きを設定
-            float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
-            nextStep.setYaw(yaw);
-            nextStep.setPitch(0);
-            
-            entity.teleport(nextStep);
-        } else {
-            // 障害物がある場合は別の経路を試す
-            tryAlternativePathToTarget(entity, current, target);
-        }
-    }
-    
-    /**
-     * 代替経路を試す（障害物回避）
-     */
-    private void tryAlternativePathToTarget(LivingEntity entity, Location current, Location target) {
-        // 90度回転した方向を試す
-        double[] angles = {Math.PI/4, -Math.PI/4, Math.PI/2, -Math.PI/2}; // 45度、右、左
-        
-        org.bukkit.util.Vector baseDirection = target.toVector().subtract(current.toVector()).normalize();
-        double baseAngle = Math.atan2(baseDirection.getZ(), baseDirection.getX());
-        
-        for (double angleOffset : angles) {
-            double newAngle = baseAngle + angleOffset;
-            org.bukkit.util.Vector alternativeDirection = new org.bukkit.util.Vector(
-                Math.cos(newAngle), 0, Math.sin(newAngle)
-            );
-            
-            Location nextStep = current.clone().add(alternativeDirection.multiply(1.0));
-            nextStep.setY(getSafeGroundLevel(nextStep));
-            
-            if (isSafeLocation(nextStep)) {
-                float yaw = (float) Math.toDegrees(Math.atan2(-alternativeDirection.getX(), alternativeDirection.getZ()));
-                nextStep.setYaw(yaw);
-                nextStep.setPitch(0);
-                
-                entity.teleport(nextStep);
-                return;
-            }
-        }
-        
-        // すべての方向が無理な場合は上に移動を試す
-        Location upStep = current.clone().add(0, 1, 0);
-        if (isSafeLocation(upStep)) {
-            entity.teleport(upStep);
-        }
-    }
     
     /**
      * ターゲットまでのパスを作成（プレイヤーのように）
@@ -590,8 +737,45 @@ public class ResourceGatheringBehavior extends BaseBehavior {
     private void createPathToTarget(LivingEntity entity, Location from, Location target) {
         if (entity == null || from == null || target == null) return;
         
-        // ターゲットまでの直線的な掘削を試行
-        digDirectToTarget(entity, from, target);
+        double distance = from.distance(target);
+        double heightDiff = target.getY() - from.getY();
+        
+        logger.info("★掘削ルート作成: 距離=" + String.format("%.2f", distance) + 
+                   ", 高度差=" + String.format("%.2f", heightDiff));
+        
+        if (heightDiff < -2.0) {
+            // 地下鉱石への場合は積極的な掘削モードに切り替え
+            logger.info("★地下鉱石検出 - 積極的掘削モードを開始");
+            
+            // 真下の鉱石の場合は直接掘り下げる
+            double horizontalDistance = Math.sqrt(Math.pow(target.getX() - from.getX(), 2) + 
+                                                  Math.pow(target.getZ() - from.getZ(), 2));
+            
+            if (horizontalDistance < 2.0) {
+                logger.info("★真下鉱石検出 - 階段状掘削を開始");
+                digStaircaseDown(entity, from, target);
+            } else {
+                logger.info("★斜め下鉱石 - 階段状掘削を開始");
+                digStaircaseToTarget(entity, from, target);
+            }
+        } else if (heightDiff > 2.0) {
+            // 上向きターゲットの場合は登攀モードに切り替え
+            logger.info("★上向きターゲット検出 - 登攀モードを開始");
+            
+            double horizontalDistance = Math.sqrt(Math.pow(target.getX() - from.getX(), 2) + 
+                                                  Math.pow(target.getZ() - from.getZ(), 2));
+            
+            if (horizontalDistance < 2.0) {
+                logger.info("★真上ターゲット検出 - 垂直登攀を開始");
+                digVerticallyUp(entity, from, target);
+            } else {
+                logger.info("★斜め上ターゲット - 継続移動モードを開始");
+                startContinuousMovement(target);
+            }
+        } else {
+            // 通常の掘削（水平移動）
+            digDirectToTarget(entity, from, target);
+        }
     }
     
     /**
@@ -601,14 +785,20 @@ public class ResourceGatheringBehavior extends BaseBehavior {
         // ターゲットへの方向ベクトルを計算
         org.bukkit.util.Vector direction = target.toVector().subtract(from.toVector()).normalize();
         
-        // 1ブロック先の位置を掘削目標とする
-        Location digTarget = from.clone().add(direction.multiply(1.0));
+        // より積極的に掘削するため、1-2ブロック先まで掘削
+        for (double distance = 1.0; distance <= 2.0; distance += 1.0) {
+            Location digTarget = from.clone().add(direction.multiply(distance));
+            
+            // 各距離での掘削実行
+            boolean dugSomething = digBlocksAtLocation(digTarget);
+            
+            if (dugSomething) {
+                logger.info("★連続掘削実行: 距離" + distance + "ブロック先を掘削");
+            }
+        }
         
-        // 足元、頭の高さ、必要に応じて上のブロックも掘削
-        digBlocksAtLocation(digTarget);
-        
-        // 掘削後、少し前進
-        Location moveTarget = from.clone().add(direction.multiply(0.5));
+        // 掘削後、より大きく前進（1.0ブロック）
+        Location moveTarget = from.clone().add(direction.multiply(1.0));
         moveTarget.setY(getSafeGroundLevel(moveTarget));
         
         if (isSafeLocation(moveTarget)) {
@@ -618,16 +808,23 @@ public class ResourceGatheringBehavior extends BaseBehavior {
             moveTarget.setPitch(0);
             
             entity.teleport(moveTarget);
-            logger.debug("地下鉱石へ向かって掘削・前進: " + direction);
+            logger.info("★地下鉱石へ向かって掘削・前進: " + String.format("方向(%.2f, %.2f, %.2f)", 
+                       direction.getX(), direction.getY(), direction.getZ()));
+        } else {
+            logger.info("★掘削後の移動先が安全でない - 追加掘削を実行");
+            // 移動先が安全でない場合は更に掘削
+            digBlocksAtLocation(moveTarget);
         }
     }
     
     /**
      * 指定位置のブロック群を掘削（足元、頭上など）
      */
-    private void digBlocksAtLocation(Location location) {
+    private boolean digBlocksAtLocation(Location location) {
         World world = location.getWorld();
-        if (world == null) return;
+        if (world == null) return false;
+        
+        boolean dugSomething = false;
         
         logger.info("★掘削位置での掘削開始: " + String.format("(%.1f, %.1f, %.1f)", 
                    location.getX(), location.getY(), location.getZ()));
@@ -638,6 +835,7 @@ public class ResourceGatheringBehavior extends BaseBehavior {
             logger.info("★足元ブロック掘削実行: " + footBlock.getType() + " at " + footBlock.getLocation());
             boolean success = BlockUtils.mineBlock(agent, footBlock);
             logger.info("★足元ブロック掘削結果: " + (success ? "成功" : "失敗"));
+            if (success) dugSomething = true;
         } else {
             logger.debug("足元ブロック掘削不要: " + footBlock.getType());
         }
@@ -648,6 +846,7 @@ public class ResourceGatheringBehavior extends BaseBehavior {
             logger.info("★頭上ブロック掘削実行: " + headBlock.getType() + " at " + headBlock.getLocation());
             boolean success = BlockUtils.mineBlock(agent, headBlock);
             logger.info("★頭上ブロック掘削結果: " + (success ? "成功" : "失敗"));
+            if (success) dugSomething = true;
         } else {
             logger.debug("頭上ブロック掘削不要: " + headBlock.getType());
         }
@@ -658,102 +857,345 @@ public class ResourceGatheringBehavior extends BaseBehavior {
             logger.info("★上部ブロック掘削実行: " + upperBlock.getType() + " at " + upperBlock.getLocation());
             boolean success = BlockUtils.mineBlock(agent, upperBlock);
             logger.info("★上部ブロック掘削結果: " + (success ? "成功" : "失敗"));
+            if (success) dugSomething = true;
         } else {
             logger.debug("上部ブロック掘削不要: " + upperBlock.getType());
         }
+        
+        return dugSomething;
     }
     
     /**
-     * 下に掘り下げる（段階的に）
+     * 真下の鉱石への階段状掘削
      */
-    private void digDownToTarget(LivingEntity entity, Location from, Location target) {
+    private void digStaircaseDown(LivingEntity entity, Location from, Location target) {
         Location current = entity.getLocation();
-        Location digTarget = current.clone().subtract(0, 1, 0);
+        double targetY = target.getY();
         
-        Block blockToRemove = digTarget.getBlock();
-        if (blockToRemove.getType().isSolid() && blockToRemove.getType() != Material.BEDROCK) {
-            // ブロックを破壊
-            BlockUtils.mineBlock(agent, blockToRemove);
-            
-            // 安全な場合のみ少しずつ下に移動
-            if (isSafeToMoveDown(current)) {
-                Location newPos = current.clone().subtract(0, 0.5, 0); // 0.5ブロックずつ下に
-                newPos.setY(getSafeGroundLevel(newPos));
-                entity.teleport(newPos);
-                logger.debug("エージェント " + agent.getAgentName() + " が下に掘り進みました");
-            }
-        }
-    }
-    
-    /**
-     * 上に足場を作って登る（段階的に）
-     */
-    private void buildUpToTarget(LivingEntity entity, Location from, Location target) {
-        Location current = entity.getLocation();
-        Location buildTarget = current.clone().add(0, 1, 0);
+        logger.info("★階段状掘削開始（真下）: 現在Y=" + String.format("%.1f", current.getY()) + 
+                   ", ターゲットY=" + String.format("%.1f", targetY));
         
-        Block blockToPlace = buildTarget.getBlock();
-        if (blockToPlace.getType().isAir()) {
-            // ブロックを設置
-            Material buildMaterial = getBuildingMaterial();
-            if (buildMaterial != null && BlockUtils.hasBlockInInventory(agent, buildMaterial, 1)) {
-                BlockUtils.placeBlock(agent, blockToPlace.getLocation(), buildMaterial);
-                
-                // 少しずつ上に移動
-                Location newPos = current.clone().add(0, 0.5, 0); // 0.5ブロックずつ上に
-                newPos.setY(getSafeGroundLevel(newPos));
-                entity.teleport(newPos);
-                logger.debug("エージェント " + agent.getAgentName() + " が上に足場を作りました");
-            }
-        }
-    }
-    
-    /**
-     * 横に掘り進む（段階的に）
-     */
-    private void digHorizontalToTarget(LivingEntity entity, Location from, Location target) {
-        Location current = entity.getLocation();
-        
-        // ターゲットの方向を計算（小さなステップで）
+        // ターゲットに向かう方向を取得（少し前方に階段を作る）
         org.bukkit.util.Vector direction = target.toVector().subtract(current.toVector()).normalize();
-        Location digTarget = current.clone().add(direction.multiply(0.5)); // 0.5ブロックずつ進む
         
-        Block blockToRemove = digTarget.getBlock();
-        if (blockToRemove.getType().isSolid() && blockToRemove.getType() != Material.BEDROCK) {
-            // ブロックを破壊
-            BlockUtils.mineBlock(agent, blockToRemove);
-            
-            // 頭上のブロックもチェック
-            Block headBlock = digTarget.clone().add(0, 1, 0).getBlock();
-            if (headBlock.getType().isSolid() && headBlock.getType() != Material.BEDROCK) {
-                BlockUtils.mineBlock(agent, headBlock);
-            }
-        }
+        // 前方1ブロック、下1ブロックの位置に階段を作る
+        Location stepLocation = current.clone().add(direction.multiply(1.0)).subtract(0, 1, 0);
         
-        // 安全な場合のみ前に移動
-        if (isSafeLocation(digTarget)) {
-            // 向きを設定
-            float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
-            digTarget.setYaw(yaw);
-            digTarget.setPitch(0);
+        // 階段の構築予定を表示
+        showStaircasePlan(current, target);
+        
+        // 階段の各部分を掘削
+        digStairStep(stepLocation);
+        
+        // 階段を下って移動
+        if (canMoveToStairStep(stepLocation)) {
+            // 移動パスを表示
+            showMovementPath(current, stepLocation);
             
-            entity.teleport(digTarget);
-            logger.debug("エージェント " + agent.getAgentName() + " が横に掘り進みました");
+            moveEntityNaturally(entity, current, stepLocation);
+            logger.info("★階段移動: Y " + String.format("%.1f", current.getY()) + 
+                       " → " + String.format("%.1f", stepLocation.getY()));
         }
     }
     
     /**
-     * 下に移動しても安全かチェック
+     * 斜め下の鉱石への階段状掘削
      */
-    private boolean isSafeToMoveDown(Location location) {
-        Location below = location.clone().subtract(0, 2, 0); // 2ブロック下をチェック
-        Block belowBlock = below.getBlock();
+    private void digStaircaseToTarget(LivingEntity entity, Location from, Location target) {
+        Location current = entity.getLocation();
         
-        // 溶岩や空気の上には移動しない
-        return belowBlock.getType().isSolid() && 
-               belowBlock.getType() != Material.LAVA && 
-               belowBlock.getType() != Material.WATER;
+        logger.info("★階段状掘削開始（斜め下）: 現在(" + String.format("%.1f, %.1f, %.1f", 
+                   current.getX(), current.getY(), current.getZ()) + 
+                   ") → ターゲット(" + String.format("%.1f, %.1f, %.1f", 
+                   target.getX(), target.getY(), target.getZ()) + ")");
+        
+        // ターゲットに向かう方向を計算
+        org.bukkit.util.Vector direction = target.toVector().subtract(current.toVector()).normalize();
+        
+        // 階段の一段を作成（前方1ブロック、下1ブロック）
+        Location stepLocation = current.clone().add(direction.multiply(1.0));
+        
+        // 高度差に応じて下降量を調整
+        double heightDiff = target.getY() - current.getY();
+        if (heightDiff < -1.0) {
+            stepLocation.subtract(0, 1, 0); // 1ブロック下げる
+        }
+        
+        // 階段の構築予定を表示
+        showStaircasePlan(current, target);
+        
+        // 階段の各部分を掘削
+        digStairStep(stepLocation);
+        
+        // 階段を移動
+        if (canMoveToStairStep(stepLocation)) {
+            // 移動パスを表示
+            showMovementPath(current, stepLocation);
+            
+            moveEntityNaturally(entity, current, stepLocation);
+            logger.info("★階段移動: (" + String.format("%.1f, %.1f, %.1f", 
+                       current.getX(), current.getY(), current.getZ()) + 
+                       ") → (" + String.format("%.1f, %.1f, %.1f", 
+                       stepLocation.getX(), stepLocation.getY(), stepLocation.getZ()) + ")");
+        }
     }
+    
+    /**
+     * 階段の一段を掘削
+     */
+    private void digStairStep(Location stepLocation) {
+        World world = stepLocation.getWorld();
+        if (world == null) return;
+        
+        logger.info("★階段掘削: " + String.format("(%.1f, %.1f, %.1f)", 
+                   stepLocation.getX(), stepLocation.getY(), stepLocation.getZ()));
+        
+        // 掘削対象をハイライト表示
+        highlightMiningBlocks(stepLocation);
+        
+        // 足元のブロックを掘削
+        Block stepBlock = world.getBlockAt(stepLocation);
+        if (stepBlock.getType().isSolid() && BlockUtils.canMineBlock(stepBlock)) {
+            logger.info("★階段足元掘削: " + stepBlock.getType());
+            BlockUtils.mineBlock(agent, stepBlock);
+        }
+        
+        // 頭の高さのブロックを掘削
+        Block headBlock = world.getBlockAt(stepLocation.getBlockX(), stepLocation.getBlockY() + 1, stepLocation.getBlockZ());
+        if (headBlock.getType().isSolid() && BlockUtils.canMineBlock(headBlock)) {
+            logger.info("★階段頭上掘削: " + headBlock.getType());
+            BlockUtils.mineBlock(agent, headBlock);
+        }
+        
+        // 必要に応じて上部も掘削
+        Block upperBlock = world.getBlockAt(stepLocation.getBlockX(), stepLocation.getBlockY() + 2, stepLocation.getBlockZ());
+        if (upperBlock.getType().isSolid() && BlockUtils.canMineBlock(upperBlock)) {
+            logger.info("★階段上部掘削: " + upperBlock.getType());
+            BlockUtils.mineBlock(agent, upperBlock);
+        }
+    }
+    
+    /**
+     * 階段の一段に移動可能かチェック
+     */
+    private boolean canMoveToStairStep(Location stepLocation) {
+        World world = stepLocation.getWorld();
+        if (world == null) return false;
+        
+        // 足元が空気または掘削済み
+        Block stepBlock = world.getBlockAt(stepLocation);
+        boolean feetClear = stepBlock.getType().isAir();
+        
+        // 頭の高さが空気または掘削済み
+        Block headBlock = world.getBlockAt(stepLocation.getBlockX(), stepLocation.getBlockY() + 1, stepLocation.getBlockZ());
+        boolean headClear = headBlock.getType().isAir();
+        
+        // 足場があるかチェック（1ブロック下）
+        Block foundationBlock = world.getBlockAt(stepLocation.getBlockX(), stepLocation.getBlockY() - 1, stepLocation.getBlockZ());
+        boolean hasFooting = foundationBlock.getType().isSolid() && foundationBlock.getType() != Material.LAVA;
+        
+        boolean canMove = feetClear && headClear && hasFooting;
+        
+        logger.debug("階段移動チェック: 足元=" + feetClear + ", 頭上=" + headClear + ", 足場=" + hasFooting + " → " + canMove);
+        
+        return canMove;
+    }
+    
+    /**
+     * エンティティを自然に移動（teleport以外の方法）
+     */
+    private void moveEntityNaturally(LivingEntity entity, Location from, Location to) {
+        // 移動距離をチェック
+        double distance = from.distance(to);
+        
+        if (distance > 3.0) {
+            // 長距離の場合は段階的移動
+            moveEntityInSteps(entity, from, to);
+        } else {
+            // 短距離の場合は物理移動を使用
+            moveEntityPhysically(entity, from, to);
+        }
+    }
+    
+    /**
+     * 物理演算による自然な移動
+     */
+    private void moveEntityPhysically(LivingEntity entity, Location from, Location to) {
+        // 最終的な安全性チェック
+        if (!isPathClearAndSafe(from, to)) {
+            logger.warn("★移動経路が安全でない - teleportにフォールバック");
+            entity.teleport(to);
+            return;
+        }
+        
+        // 方向ベクトルを計算
+        org.bukkit.util.Vector direction = to.toVector().subtract(from.toVector());
+        double distance = direction.length();
+        
+        if (distance < 0.1) {
+            return; // 移動不要
+        }
+        
+        // 移動速度を調整（設定から取得）
+        double movementSpeed = agent.getPlugin().getConfigManager().getConfig().getDouble("agent.default_behavior.resource_gathering.movement_speed", 0.21);
+        direction.normalize().multiply(Math.min(distance, movementSpeed));
+        
+        // 向きを設定
+        float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
+        Location newLocation = entity.getLocation();
+        newLocation.setYaw(yaw);
+        newLocation.setPitch(0);
+        entity.teleport(newLocation); // 向きのみteleport
+        
+        // 物理移動実行
+        try {
+            entity.setVelocity(direction);
+            logger.debug("★物理移動実行: 速度=" + String.format("(%.3f, %.3f, %.3f)", 
+                        direction.getX(), direction.getY(), direction.getZ()));
+        } catch (Exception e) {
+            // 物理移動が失敗した場合はteleportにフォールバック
+            logger.warn("★物理移動失敗 - teleportにフォールバック: " + e.getMessage());
+            entity.teleport(to);
+        }
+    }
+    
+    /**
+     * 段階的移動（長距離用）
+     */
+    private void moveEntityInSteps(LivingEntity entity, Location from, Location to) {
+        org.bukkit.util.Vector direction = to.toVector().subtract(from.toVector());
+        double totalDistance = direction.length();
+        
+        // 0.3ブロックずつ段階的に移動（自然な歩幅）
+        double stepSize = 0.3;
+        int steps = (int) Math.ceil(totalDistance / stepSize);
+        
+        org.bukkit.util.Vector stepVector = direction.clone().normalize().multiply(stepSize);
+        
+        logger.debug("★段階的移動開始: " + steps + "ステップ");
+        
+        for (int i = 1; i <= steps; i++) {
+            Location stepTarget = from.clone().add(stepVector.clone().multiply(i));
+            
+            // 最後のステップは正確な目標位置
+            if (i == steps) {
+                stepTarget = to.clone();
+            }
+            
+            // 各ステップの安全性をチェック
+            if (isPathClearAndSafe(entity.getLocation(), stepTarget)) {
+                // 小さなteleportで滑らかに移動
+                entity.teleport(stepTarget);
+                
+                // 少し遅延を入れて自然に見せる（20tick/秒 = 50ms/tick）
+                try {
+                    Thread.sleep(50); // 50ms遅延（1tick相当）
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            } else {
+                logger.warn("★段階的移動中断: ステップ" + i + "が安全でない");
+                break;
+            }
+        }
+    }
+    
+    /**
+     * 移動経路が安全かつ障害物がないかチェック
+     */
+    private boolean isPathClearAndSafe(Location from, Location to) {
+        World world = from.getWorld();
+        if (world == null || world != to.getWorld()) return false;
+        
+        // レイキャスティングで経路をチェック
+        org.bukkit.util.Vector direction = to.toVector().subtract(from.toVector());
+        double distance = direction.length();
+        
+        if (distance < 0.1) return true;
+        
+        direction.normalize();
+        
+        // 0.2ブロック間隔でチェック
+        for (double d = 0.2; d <= distance; d += 0.2) {
+            Location checkPoint = from.clone().add(direction.clone().multiply(d));
+            
+            // 足元と頭の高さをチェック
+            Block feetBlock = world.getBlockAt(checkPoint);
+            Block headBlock = world.getBlockAt(checkPoint.getBlockX(), 
+                                             checkPoint.getBlockY() + 1, 
+                                             checkPoint.getBlockZ());
+            
+            // 障害物があるかチェック
+            if (feetBlock.getType().isSolid() || headBlock.getType().isSolid()) {
+                // 溶岩や危険物質は完全に回避
+                if (feetBlock.getType() == Material.LAVA || 
+                    headBlock.getType() == Material.LAVA ||
+                    feetBlock.getType() == Material.WATER ||
+                    headBlock.getType() == Material.WATER) {
+                    return false;
+                }
+                
+                // 掘削可能でない固体ブロックがあれば経路不可
+                if (!BlockUtils.canMineBlock(feetBlock) && feetBlock.getType().isSolid()) {
+                    return false;
+                }
+                if (!BlockUtils.canMineBlock(headBlock) && headBlock.getType().isSolid()) {
+                    return false;
+                }
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * 垂直に上に登攀する（真上のターゲット用）
+     */
+    private void digVerticallyUp(LivingEntity entity, Location from, Location target) {
+        Location current = entity.getLocation();
+        double targetY = target.getY();
+        
+        logger.info("★垂直登攀開始: 現在Y=" + String.format("%.1f", current.getY()) + 
+                   ", ターゲットY=" + String.format("%.1f", targetY));
+        
+        // 1ブロック上を確認・掘削
+        Location digTarget = current.clone().add(0, 1, 0);
+        
+        // 上のブロックを掘削（あれば）
+        Block blockAbove = digTarget.getBlock();
+        if (blockAbove.getType().isSolid() && BlockUtils.canMineBlock(blockAbove)) {
+            logger.info("★垂直登攀掘削実行: " + blockAbove.getType() + " at " + blockAbove.getLocation());
+            boolean success = BlockUtils.mineBlock(agent, blockAbove);
+            if (success) {
+                logger.info("★垂直登攀掘削成功: " + blockAbove.getType());
+            }
+        }
+        
+        // 足場を作って上に移動
+        Location buildTarget = current.clone();
+        Material buildMaterial = getBuildingMaterial();
+        
+        if (buildMaterial != null && BlockUtils.hasBlockInInventory(agent, buildMaterial, 1)) {
+            // 足場を設置
+            boolean built = BlockUtils.placeBlock(agent, buildTarget, buildMaterial);
+            if (built) {
+                logger.info("★足場設置成功: " + buildMaterial + " at " + buildTarget);
+                
+                // 上に移動
+                Location newPos = current.clone().add(0, 1, 0);
+                moveEntityNaturally(entity, current, newPos);
+                logger.info("★垂直登攀移動: Y " + String.format("%.1f", current.getY()) + 
+                           " → " + String.format("%.1f", newPos.getY()));
+            }
+        } else {
+            logger.info("★足場材料不足 - 他の方法を試行");
+            // 材料がない場合は継続移動モードにフォールバック
+            startContinuousMovement(target);
+        }
+    }
+    
+    
     
     /**
      * 建築用のマテリアルを取得
@@ -868,15 +1310,28 @@ public class ResourceGatheringBehavior extends BaseBehavior {
      * エージェントとターゲットの座標差分をスコアボードとログに更新
      */
     private void updateCoordinateDifference(Location agentLocation, Location targetLocation) {
-        // 座標差分を計算
+        // 座標差分を計算（エージェントから見たターゲットの方向）
         double deltaX = targetLocation.getX() - agentLocation.getX();
         double deltaY = targetLocation.getY() - agentLocation.getY();
         double deltaZ = targetLocation.getZ() - agentLocation.getZ();
         double distance = agentLocation.distance(targetLocation);
         
-        // フォーマットした文字列を作成
-        String coordDiffInfo = String.format("ΔX:%.1f ΔY:%.1f ΔZ:%.1f 距離:%.1f", 
-                                            deltaX, deltaY, deltaZ, distance);
+        // デバッグ用：実際の座標を確認
+        logger.debug("座標確認 - エージェント:(" + String.format("%.1f,%.1f,%.1f", 
+                    agentLocation.getX(), agentLocation.getY(), agentLocation.getZ()) + 
+                    "), ターゲット:(" + String.format("%.1f,%.1f,%.1f", 
+                    targetLocation.getX(), targetLocation.getY(), targetLocation.getZ()) + ")");
+        
+        // 方向を分かりやすく表示
+        String directionX = deltaX > 0 ? "東" : deltaX < 0 ? "西" : "同X";
+        String directionY = deltaY > 0 ? "上" : deltaY < 0 ? "下" : "同Y";
+        String directionZ = deltaZ > 0 ? "南" : deltaZ < 0 ? "北" : "同Z";
+        
+        String coordDiffInfo = String.format("%s%.1f %s%.1f %s%.1f 距離:%.1f", 
+                                            directionX, Math.abs(deltaX),
+                                            directionY, Math.abs(deltaY), 
+                                            directionZ, Math.abs(deltaZ),
+                                            distance);
         
         // スコアボードに表示
         agent.getStatusDisplay().setTarget(String.format("%s (%s)", 
@@ -902,5 +1357,205 @@ public class ResourceGatheringBehavior extends BaseBehavior {
         
         return String.format("収集統計: 総アイテム数=%d, 種類=%d, 採掘中=%s", 
                            totalItems, inventory.size(), isMining ? "はい" : "いいえ");
+    }
+    
+    // ==============================================
+    // パーティクル表示システム
+    // ==============================================
+    
+    /**
+     * ターゲットブロックをハイライト表示
+     */
+    private void highlightTargetBlock(Block block) {
+        if (block == null || block.getWorld() == null) return;
+        
+        Location center = block.getLocation().add(0.5, 0.5, 0.5);
+        World world = block.getWorld();
+        
+        // ターゲット鉱石は発光エフェクト
+        world.spawnParticle(Particle.ENCHANTMENT_TABLE, center, 10, 0.4, 0.4, 0.4, 0.1);
+        world.spawnParticle(Particle.CRIT, center, 8, 0.3, 0.3, 0.3, 0.05);
+        world.spawnParticle(Particle.FIREWORKS_SPARK, center, 3, 0.2, 0.2, 0.2, 0.02);
+        
+        // 金色の発光パーティクル
+        world.spawnParticle(Particle.REDSTONE, center, 5, 0.3, 0.3, 0.3, 0,
+                           new Particle.DustOptions(org.bukkit.Color.YELLOW, 2.0f));
+        
+        logger.debug("★ターゲットブロックをハイライト: " + block.getType() + " at " + center);
+    }
+    
+    /**
+     * エージェントからターゲットまでのロープ（線）を描画
+     */
+    private void drawRopeToTarget(Location agentLocation, Location targetLocation) {
+        if (agentLocation == null || targetLocation == null || agentLocation.getWorld() != targetLocation.getWorld()) {
+            return;
+        }
+        
+        World world = agentLocation.getWorld();
+        
+        // エージェントの位置を少し上にずらして見やすくする
+        Location startPoint = agentLocation.clone().add(0, 1.5, 0);
+        Location endPoint = targetLocation.clone().add(0.5, 0.5, 0.5);
+        
+        // 2点間の距離と方向を計算
+        org.bukkit.util.Vector direction = endPoint.toVector().subtract(startPoint.toVector());
+        double distance = direction.length();
+        
+        if (distance < 0.1) return;
+        
+        direction.normalize();
+        
+        // ロープを描画するためのパーティクル間隔
+        double particleSpacing = 0.3; // 0.3ブロック間隔
+        int particleCount = (int) Math.ceil(distance / particleSpacing);
+        
+        // ロープの色（距離に応じて変化）
+        org.bukkit.Color ropeColor;
+        if (distance <= 4.0) {
+            ropeColor = org.bukkit.Color.GREEN; // 採掘可能距離は緑
+        } else if (distance <= 10.0) {
+            ropeColor = org.bukkit.Color.YELLOW; // 中距離は黄色
+        } else {
+            ropeColor = org.bukkit.Color.RED; // 遠距離は赤
+        }
+        
+        // パーティクルでロープを描画
+        for (int i = 0; i <= particleCount; i++) {
+            double t = (double) i / particleCount;
+            Location ropePoint = startPoint.clone().add(direction.clone().multiply(distance * t));
+            
+            // メインのロープ線（発光パーティクル）
+            world.spawnParticle(Particle.REDSTONE, ropePoint, 1, 0.0, 0.0, 0.0, 0,
+                               new Particle.DustOptions(ropeColor, 1.5f));
+            
+            // 追加の視覚効果（少し発光させる）
+            if (i % 3 == 0) { // 3つおきにより明るいパーティクル
+                world.spawnParticle(Particle.GLOW, ropePoint, 1, 0.05, 0.05, 0.05, 0.01);
+            }
+        }
+        
+        // ロープの両端に特別なマーカー
+        // 開始点（エージェント側）
+        world.spawnParticle(Particle.VILLAGER_HAPPY, startPoint, 3, 0.1, 0.1, 0.1, 0.02);
+        world.spawnParticle(Particle.REDSTONE, startPoint, 3, 0.1, 0.1, 0.1, 0,
+                           new Particle.DustOptions(org.bukkit.Color.BLUE, 2.0f));
+        
+        // 終了点（ターゲット側）
+        world.spawnParticle(Particle.CRIT, endPoint, 3, 0.1, 0.1, 0.1, 0.02);
+        world.spawnParticle(Particle.REDSTONE, endPoint, 3, 0.1, 0.1, 0.1, 0,
+                           new Particle.DustOptions(org.bukkit.Color.ORANGE, 2.0f));
+        
+        logger.debug("★ロープ描画: 距離=" + String.format("%.1f", distance) + 
+                    ", 色=" + ropeColor.toString() + ", パーティクル数=" + (particleCount + 1));
+    }
+    
+    /**
+     * 移動パスを表示
+     */
+    private void showMovementPath(Location from, Location to) {
+        if (from == null || to == null || from.getWorld() != to.getWorld()) return;
+        
+        World world = from.getWorld();
+        org.bukkit.util.Vector direction = to.toVector().subtract(from.toVector());
+        double distance = direction.length();
+        
+        if (distance < 0.1) return;
+        
+        direction.normalize();
+        
+        // 0.5ブロック間隔でパスを表示
+        for (double d = 0.5; d <= distance; d += 0.5) {
+            Location pathPoint = from.clone().add(direction.clone().multiply(d));
+            
+            // 発光する青色のパーティクルで移動パスを表示
+            world.spawnParticle(Particle.SOUL_FIRE_FLAME, pathPoint.add(0, 0.1, 0), 2, 0.1, 0.1, 0.1, 0.01);
+            world.spawnParticle(Particle.GLOW, pathPoint, 3, 0.2, 0.2, 0.2, 0.02);
+            
+            // 青色の発光パーティクル
+            world.spawnParticle(Particle.REDSTONE, pathPoint, 2, 0.1, 0.1, 0.1, 0,
+                               new Particle.DustOptions(org.bukkit.Color.AQUA, 1.5f));
+        }
+        
+        logger.debug("★移動パス表示: " + String.format("%.1f", distance) + "ブロック");
+    }
+    
+    /**
+     * 掘削対象ブロックをハイライト
+     */
+    private void highlightMiningBlocks(Location location) {
+        if (location == null || location.getWorld() == null) return;
+        
+        World world = location.getWorld();
+        
+        // 足元ブロック
+        Block footBlock = world.getBlockAt(location);
+        if (footBlock.getType().isSolid() && BlockUtils.canMineBlock(footBlock)) {
+            Location footCenter = footBlock.getLocation().add(0.5, 0.5, 0.5);
+            // 発光する赤色エフェクトで掘削対象を表示
+            world.spawnParticle(Particle.FLAME, footCenter, 5, 0.3, 0.3, 0.3, 0.02);
+            world.spawnParticle(Particle.LAVA, footCenter, 2, 0.2, 0.2, 0.2, 0.01);
+            world.spawnParticle(Particle.REDSTONE, footCenter, 4, 0.3, 0.3, 0.3, 0,
+                               new Particle.DustOptions(org.bukkit.Color.RED, 2.0f));
+        }
+        
+        // 頭上ブロック
+        Block headBlock = world.getBlockAt(location.getBlockX(), location.getBlockY() + 1, location.getBlockZ());
+        if (headBlock.getType().isSolid() && BlockUtils.canMineBlock(headBlock)) {
+            Location headCenter = headBlock.getLocation().add(0.5, 0.5, 0.5);
+            // 発光する赤色エフェクトで掘削対象を表示
+            world.spawnParticle(Particle.FLAME, headCenter, 5, 0.3, 0.3, 0.3, 0.02);
+            world.spawnParticle(Particle.LAVA, headCenter, 2, 0.2, 0.2, 0.2, 0.01);
+            world.spawnParticle(Particle.REDSTONE, headCenter, 4, 0.3, 0.3, 0.3, 0,
+                               new Particle.DustOptions(org.bukkit.Color.RED, 2.0f));
+        }
+        
+        // 上部ブロック
+        Block upperBlock = world.getBlockAt(location.getBlockX(), location.getBlockY() + 2, location.getBlockZ());
+        if (upperBlock.getType().isSolid() && BlockUtils.canMineBlock(upperBlock)) {
+            Location upperCenter = upperBlock.getLocation().add(0.5, 0.5, 0.5);
+            // 発光する赤色エフェクトで掘削対象を表示
+            world.spawnParticle(Particle.FLAME, upperCenter, 5, 0.3, 0.3, 0.3, 0.02);
+            world.spawnParticle(Particle.LAVA, upperCenter, 2, 0.2, 0.2, 0.2, 0.01);
+            world.spawnParticle(Particle.REDSTONE, upperCenter, 4, 0.3, 0.3, 0.3, 0,
+                               new Particle.DustOptions(org.bukkit.Color.RED, 2.0f));
+        }
+    }
+    
+    
+    /**
+     * 階段の構築予定を表示
+     */
+    private void showStaircasePlan(Location current, Location target) {
+        if (current == null || target == null || current.getWorld() != target.getWorld()) return;
+        
+        World world = current.getWorld();
+        org.bukkit.util.Vector direction = target.toVector().subtract(current.toVector()).normalize();
+        
+        // 階段の一段を表示
+        Location stepLocation = current.clone().add(direction.multiply(1.0));
+        
+        // 高度差に応じて下降量を調整
+        double heightDiff = target.getY() - current.getY();
+        if (heightDiff < -1.0) {
+            stepLocation.subtract(0, 1, 0);
+        }
+        
+        // 発光する緑色のパーティクルで階段予定地を表示
+        Location stepCenter = stepLocation.clone().add(0.5, 0.5, 0.5);
+        world.spawnParticle(Particle.VILLAGER_HAPPY, stepCenter, 8, 0.3, 0.3, 0.3, 0.02);
+        world.spawnParticle(Particle.GLOW, stepCenter, 5, 0.2, 0.2, 0.2, 0.01);
+        world.spawnParticle(Particle.REDSTONE, stepCenter, 6, 0.3, 0.3, 0.3, 0,
+                           new Particle.DustOptions(org.bukkit.Color.GREEN, 2.0f));
+        
+        // 発光する階段の輪郭を表示
+        for (int i = 0; i < 3; i++) {
+            Location outlinePoint = stepLocation.clone().add(0, i, 0).add(0.5, 0.5, 0.5);
+            world.spawnParticle(Particle.GLOW, outlinePoint, 2, 0.1, 0.1, 0.1, 0.01);
+            world.spawnParticle(Particle.REDSTONE, outlinePoint, 2, 0.1, 0.1, 0.1, 0,
+                               new Particle.DustOptions(org.bukkit.Color.LIME, 1.5f));
+        }
+        
+        logger.debug("★階段構築予定表示: " + stepCenter);
     }
 }
