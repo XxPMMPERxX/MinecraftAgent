@@ -219,4 +219,25 @@ public class ConfigManager {
     public String getMySQLPassword() {
         return config.getString("database.mysql.password", "");
     }
+    
+    /**
+     * ログレベルを取得
+     */
+    public String getLogLevel() {
+        return config.getString("logging.level", "INFO");
+    }
+    
+    /**
+     * ファイルログが有効かどうか
+     */
+    public boolean isFileLoggingEnabled() {
+        return config.getBoolean("logging.file", true);
+    }
+    
+    /**
+     * コンソールログが有効かどうか
+     */
+    public boolean isConsoleLoggingEnabled() {
+        return config.getBoolean("logging.console", true);
+    }
 }

@@ -43,11 +43,8 @@ public class MovementUtils {
         
         // 移動先が安全かチェック
         if (isSafeToMoveTo(newLocation)) {
-            // エンティティの速度を設定して自然な移動を演出
-            Vector velocity = movement.clone();
-            velocity.setY(0); // 重力の影響を受けるようにY成分をリセット
-            
-            entity.setVelocity(velocity);
+            // 直接テレポートによる移動（Villagerエンティティでより確実）
+            entity.teleport(newLocation);
             
             // 少し遅延をつけて向きを調整
             entity.teleport(newLocation);

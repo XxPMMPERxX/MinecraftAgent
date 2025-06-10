@@ -27,14 +27,14 @@ public class MinecraftAgentPlugin extends JavaPlugin {
     public void onEnable() {
         instance = this;
         
-        // ロガー初期化
-        this.logger = new Logger(this);
-        logger.info("MinecraftAgent プラグインを開始しています...");
-        
         try {
-            // 設定マネージャー初期化
+            // 設定マネージャー初期化（ロガーより先に）
             this.configManager = new ConfigManager(this);
             configManager.loadConfig();
+            
+            // ロガー初期化（設定読み込み後）
+            this.logger = new Logger(this);
+            logger.info("MinecraftAgent プラグインを開始しています...");
             logger.info("設定ファイルを読み込みました");
             
             // データベースマネージャー初期化

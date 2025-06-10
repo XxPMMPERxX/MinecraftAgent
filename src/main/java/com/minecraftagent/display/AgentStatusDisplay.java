@@ -9,6 +9,11 @@ import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.scoreboard.DisplaySlot;
+import org.bukkit.scoreboard.Objective;
+import org.bukkit.scoreboard.Score;
+import org.bukkit.scoreboard.Scoreboard;
+import org.bukkit.scoreboard.ScoreboardManager;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -24,6 +29,8 @@ public class AgentStatusDisplay {
     private String currentAction;
     private String currentTarget;
     private long lastUpdate;
+    private Scoreboard scoreboard;
+    private Objective objective;
     
     // 行動の日本語表示マップ
     private static final Map<String, String> BEHAVIOR_NAMES = new HashMap<>();
@@ -40,6 +47,9 @@ public class AgentStatusDisplay {
         this.currentAction = "";
         this.currentTarget = "";
         this.lastUpdate = System.currentTimeMillis();
+        
+        // スコアボード初期化
+        initializeScoreboard();
     }
     
     /**
@@ -54,6 +64,7 @@ public class AgentStatusDisplay {
             @Override
             public void run() {
                 updateDisplay();
+                updateScoreboard();
             }
         }.runTaskTimer(agent.getPlugin(), 0L, 20L); // 1秒ごとに更新
     }
@@ -112,8 +123,7 @@ public class AgentStatusDisplay {
         // エンティティ名を更新
         updateEntityName(entity);
         
-        // 近くのプレイヤーにアクションバーメッセージを送信
-        sendActionBarToNearbyPlayers(entity);
+        // スコアボードを更新（チャットメッセージは削除）
     }
     
     /**
@@ -144,22 +154,68 @@ public class AgentStatusDisplay {
     }
     
     /**
-     * 近くのプレイヤーにアクションバーメッセージを送信
+     * スコアボードを初期化
      */
-    private void sendActionBarToNearbyPlayers(LivingEntity entity) {
-        if (currentTarget.isEmpty()) {
-            return;
+    private void initializeScoreboard() {
+        ScoreboardManager manager = Bukkit.getScoreboardManager();
+        if (manager != null) {
+            this.scoreboard = manager.getNewScoreboard();
+            this.objective = scoreboard.registerNewObjective("agents", "dummy", "§6エージェント状況");
+            objective.setDisplaySlot(DisplaySlot.SIDEBAR);
+        }
+    }
+    
+    /**
+     * スコアボードを更新
+     */
+    private void updateScoreboard() {
+        if (objective == null) return;
+        
+        // 既存のスコアをクリア
+        for (String entry : scoreboard.getEntries()) {
+            scoreboard.resetScores(entry);
         }
         
-        String message = buildActionBarMessage();
+        // エージェント情報を追加
+        int score = 10;
         
-        // 半径20ブロック以内のプレイヤーに送信
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.getWorld().equals(entity.getWorld()) && 
-                player.getLocation().distance(entity.getLocation()) <= 20) {
-                
-                // チャットにメッセージを送信（ActionBarの代替）
-                player.sendMessage("[エージェント] " + message);
+        // エージェント名
+        Score nameScore = objective.getScore("§a" + agent.getAgentName());
+        nameScore.setScore(score--);
+        
+        // 現在の行動
+        if (!currentStatus.isEmpty()) {
+            Score statusScore = objective.getScore("§7行動: " + currentStatus);
+            statusScore.setScore(score--);
+        }
+        
+        // 現在のアクション
+        if (!currentAction.isEmpty()) {
+            Score actionScore = objective.getScore("§e" + currentAction);
+            actionScore.setScore(score--);
+        }
+        
+        // ターゲット
+        if (!currentTarget.isEmpty()) {
+            Score targetScore = objective.getScore("§f対象: " + currentTarget);
+            targetScore.setScore(score--);
+        }
+        
+        // 体力と満腹度
+        Score healthScore = objective.getScore("§c体力: " + String.format("%.1f/20", agent.getHealth()));
+        healthScore.setScore(score--);
+        
+        Score foodScore = objective.getScore("§6満腹: " + agent.getFoodLevel() + "/20");
+        foodScore.setScore(score--);
+        
+        // 近くのプレイヤーにスコアボードを表示
+        LivingEntity entity = agent.getEntity();
+        if (entity != null) {
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                if (player.getWorld().equals(entity.getWorld()) && 
+                    player.getLocation().distance(entity.getLocation()) <= 30) {
+                    player.setScoreboard(scoreboard);
+                }
             }
         }
     }
@@ -269,12 +325,7 @@ public class AgentStatusDisplay {
         String message = String.format("§e%s§r: %s §7(%d/%d)", 
                                        agent.getAgentName(), progressBar, progress, total);
         
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.getWorld().equals(agent.getEntity().getWorld()) && 
-                player.getLocation().distance(agent.getEntity().getLocation()) <= 30) {
-                player.sendMessage("[進行状況] " + message);
-            }
-        }
+        // 進行状況はスコアボードで表示（チャットメッセージは削除）
     }
     
     /**

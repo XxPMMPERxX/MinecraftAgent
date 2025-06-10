@@ -39,10 +39,10 @@ public class Logger {
     public Logger(MinecraftAgentPlugin plugin) {
         this.plugin = plugin;
         
-        // 設定から読み込み（初期化時は仮の値を使用）
-        this.fileLogging = true;
-        this.consoleLogging = true;
-        this.level = LogLevel.INFO;
+        // 設定から読み込み
+        this.fileLogging = plugin.getConfigManager().isFileLoggingEnabled();
+        this.consoleLogging = plugin.getConfigManager().isConsoleLoggingEnabled();
+        this.level = parseLogLevel(plugin.getConfigManager().getLogLevel());
         
         // ログファイル設定
         File logDir = new File(plugin.getDataFolder(), "logs");
@@ -50,6 +50,17 @@ public class Logger {
             logDir.mkdirs();
         }
         this.logFile = new File(logDir, "agent.log");
+    }
+    
+    /**
+     * 文字列からLogLevelを解析
+     */
+    private LogLevel parseLogLevel(String levelString) {
+        try {
+            return LogLevel.valueOf(levelString.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return LogLevel.INFO; // デフォルト値
+        }
     }
     
     /**

@@ -31,7 +31,15 @@ public class ExplorationBehavior extends BaseBehavior {
     
     @Override
     public boolean canExecute() {
-        return isAgentValid();
+        if (!isAgentValid()) {
+            logger.debug("ExplorationBehavior: エージェントが無効");
+            return false;
+        }
+        
+        // 他の行動がより重要な場合は探索を停止
+        // 常に最低優先度として動作させる
+        logger.debug("ExplorationBehavior: 実行可能");
+        return true;
     }
     
     @Override
@@ -64,14 +72,13 @@ public class ExplorationBehavior extends BaseBehavior {
             agent.getStatusDisplay().setAction("移動中");
             agent.getStatusDisplay().setTarget(String.format("(%d, %d, %d)", 
                 targetLocation.getBlockX(), targetLocation.getBlockY(), targetLocation.getBlockZ()));
-            boolean reached = MovementUtils.walkTowards(entity, targetLocation, 0.15);
-            if (reached) {
-                generateNewTarget(); // 目標に到達したら新しいターゲットを生成
-            }
             
-            // ジャンプが必要な場合
-            if (MovementUtils.needsJump(entity, targetLocation)) {
-                MovementUtils.performJump(entity);
+            // シンプルで確実な移動ロジック
+            double distance = currentLocation.distance(targetLocation);
+            if (distance < 2.0) {
+                generateNewTarget(); // 目標に到達したら新しいターゲットを生成
+            } else {
+                moveTowardsTargetSimple(entity, currentLocation);
             }
         }
         
@@ -90,11 +97,12 @@ public class ExplorationBehavior extends BaseBehavior {
      */
     private void checkIfStuck(Location currentLocation) {
         if (lastPosition != null && 
-            lastPosition.distance(currentLocation) < 0.5) {
+            lastPosition.distance(currentLocation) < 0.3) { // より敏感に検出
             stuckCounter++;
-            if (stuckCounter > 10) {
+            if (stuckCounter > 5) { // より早く反応
                 // スタックしている場合は新しいターゲットを生成
                 agent.getStatusDisplay().setAction("スタック回避");
+                logger.debug("スタック検出 - 新しいターゲットを生成");
                 generateNewTarget();
                 stuckCounter = 0;
             }
@@ -132,9 +140,9 @@ public class ExplorationBehavior extends BaseBehavior {
         
         Location currentLocation = entity.getLocation();
         
-        // ランダムな方向と距離でターゲットを生成
+        // ランダムな方向と距離でターゲットを生成（短い距離で確実に）
         double angle = random.nextDouble() * 2 * Math.PI;
-        double distance = 10 + random.nextDouble() * 20; // 10-30ブロック
+        double distance = 5 + random.nextDouble() * 10; // 5-15ブロック（短距離）
         
         double offsetX = Math.cos(angle) * distance;
         double offsetZ = Math.sin(angle) * distance;
@@ -152,7 +160,66 @@ public class ExplorationBehavior extends BaseBehavior {
     }
     
     /**
-     * ターゲットに向かって移動
+     * ターゲットに向かってシンプルに移動（ぐるぐる回らない）
+     */
+    private void moveTowardsTargetSimple(LivingEntity entity, Location currentLocation) {
+        if (targetLocation == null) return;
+        
+        Vector direction = targetLocation.toVector().subtract(currentLocation.toVector());
+        double distance = direction.length();
+        
+        if (distance > 0.5) {
+            direction.normalize();
+            
+            // 直線的な移動で、小さなステップ
+            Location newLocation = currentLocation.clone();
+            double moveDistance = Math.min(1.0, distance); // 1ブロックずつ移動
+            newLocation.add(direction.multiply(moveDistance));
+            
+            // 安全な地面の高さに調整
+            newLocation.setY(getGroundLevel(newLocation));
+            
+            // エンティティの向きを設定（移動方向に向ける）
+            float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
+            newLocation.setYaw(yaw);
+            newLocation.setPitch(0);
+            
+            // 移動先が安全かチェック
+            if (isSafeToMoveTo(newLocation)) {
+                entity.teleport(newLocation);
+            } else {
+                // 移動できない場合は新しいターゲットを生成
+                generateNewTarget();
+            }
+        }
+    }
+    
+    /**
+     * 移動先が安全かチェック
+     */
+    private boolean isSafeToMoveTo(Location location) {
+        if (location == null || location.getWorld() == null) return false;
+        
+        Block feet = location.getBlock();
+        Block head = location.getWorld().getBlockAt(location.getBlockX(), location.getBlockY() + 1, location.getBlockZ());
+        Block ground = location.getWorld().getBlockAt(location.getBlockX(), location.getBlockY() - 1, location.getBlockZ());
+        
+        // 足元と頭上が空気で、地面が固体
+        boolean feetClear = feet.getType().isAir() || !feet.getType().isSolid();
+        boolean headClear = head.getType().isAir() || !head.getType().isSolid();
+        boolean groundSolid = ground.getType().isSolid();
+        
+        // 危険なブロックを回避
+        boolean notDangerous = feet.getType() != Material.LAVA && 
+                              feet.getType() != Material.FIRE &&
+                              head.getType() != Material.LAVA &&
+                              head.getType() != Material.FIRE;
+        
+        return feetClear && headClear && groundSolid && notDangerous;
+    }
+    
+    /**
+     * ターゲットに向かって移動（旧版 - 使用しない）
      */
     private void moveTowardsTarget(LivingEntity entity, Location currentLocation) {
         Vector direction = targetLocation.toVector().subtract(currentLocation.toVector());

@@ -279,6 +279,75 @@ public class BlockUtils {
     }
     
     /**
+     * ブロックを採掘
+     */
+    public static boolean mineBlock(MinecraftAgent agent, Block block) {
+        if (!canMineBlock(block)) {
+            agent.getLogger().debug("採掘不可能なブロック: " + block.getType() + " at " + block.getLocation());
+            return false;
+        }
+        
+        Material material = block.getType();
+        Location blockLocation = block.getLocation();
+        
+        agent.getLogger().info("★ブロック採掘実行: " + material.name() + " at (" + 
+                               blockLocation.getBlockX() + ", " + blockLocation.getBlockY() + ", " + blockLocation.getBlockZ() + ")");
+        
+        // ブロックを破壊してアイテムをインベントリに追加
+        ItemStack drop = getBlockDrop(material);
+        addItemToInventory(agent, drop);
+        
+        // ブロックをエアに変更
+        block.setType(Material.AIR);
+        
+        agent.getLogger().info("★ブロック採掘完了: " + material.name() + " -> " + drop.getType() + " x" + drop.getAmount());
+        return true;
+    }
+    
+    /**
+     * ブロックを設置
+     */
+    public static boolean placeBlock(MinecraftAgent agent, Location location, Material material) {
+        if (!canPlaceBlock(location)) {
+            return false;
+        }
+        
+        // インベントリから材料を消費
+        if (!removeItemFromInventory(agent, material, 1)) {
+            return false;
+        }
+        
+        // ブロックを設置
+        Block block = location.getBlock();
+        block.setType(material);
+        
+        agent.getLogger().debug("ブロックを設置しました: " + material.name());
+        return true;
+    }
+    
+    /**
+     * ブロックを破壊した時のドロップアイテムを取得
+     */
+    private static ItemStack getBlockDrop(Material material) {
+        switch (material) {
+            case DIAMOND_ORE:
+                return new ItemStack(Material.DIAMOND, 1);
+            case IRON_ORE:
+                return new ItemStack(Material.RAW_IRON, 1);
+            case GOLD_ORE:
+                return new ItemStack(Material.RAW_GOLD, 1);
+            case COAL_ORE:
+                return new ItemStack(Material.COAL, 1);
+            case STONE:
+                return new ItemStack(Material.COBBLESTONE, 1);
+            case OAK_LOG:
+                return new ItemStack(Material.OAK_LOG, 1);
+            default:
+                return new ItemStack(material, 1);
+        }
+    }
+    
+    /**
      * インベントリをクリア
      */
     public static void clearInventory(MinecraftAgent agent) {

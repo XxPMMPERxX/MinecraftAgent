@@ -148,9 +148,9 @@ public class MinecraftAgent {
         // 安全なスポーン位置を確保
         Location safeLocation = findSafeSpawnLocation(homeLocation);
         
-        // より制御しやすいZombie Villagerエンティティを使用
+        // 村人エンティティを使用
         // 人間らしい見た目で攻撃的でない
-        Entity spawnedEntity = world.spawnEntity(safeLocation, EntityType.ZOMBIE_VILLAGER);
+        Entity spawnedEntity = world.spawnEntity(safeLocation, EntityType.VILLAGER);
         
         if (spawnedEntity instanceof LivingEntity) {
             this.entity = (LivingEntity) spawnedEntity;
@@ -160,16 +160,17 @@ public class MinecraftAgent {
             entity.setCustomNameVisible(true);
             entity.setRemoveWhenFarAway(false);
             entity.setPersistent(true);
-            // AIを部分的に無効化（移動は自然に）
+            // AIを部分的に制御（移動可能にするためsetAwareは無効化しない）
             if (entity instanceof org.bukkit.entity.Mob) {
                 org.bukkit.entity.Mob mob = (org.bukkit.entity.Mob) entity;
-                mob.setAware(false); // 環境への反応を無効化
+                // mob.setAware(false); // コメントアウト：移動を可能にするため
+                mob.setTarget(null); // ターゲットのみクリア
             }
             
-            // Zombie Villagerの場合の設定
-            if (entity instanceof org.bukkit.entity.ZombieVillager) {
-                org.bukkit.entity.ZombieVillager zombieVillager = (org.bukkit.entity.ZombieVillager) entity;
-                zombieVillager.setTarget(null); // ターゲット解除
+            // 村人の場合の設定
+            if (entity instanceof org.bukkit.entity.Villager) {
+                org.bukkit.entity.Villager villager = (org.bukkit.entity.Villager) entity;
+                villager.setTarget(null); // ターゲット解除
             }
             
             // 初期ステータス更新
@@ -278,6 +279,12 @@ public class MinecraftAgent {
             this.health = entity.getHealth();
             this.foodLevel = (entity instanceof org.bukkit.entity.Player) ? 
                 ((org.bukkit.entity.Player) entity).getFoodLevel() : 20;
+                
+            // 体力が非常に低い場合は緊急回復
+            if (this.health <= 2.0 && this.health < entity.getMaxHealth()) {
+                entity.setHealth(Math.min(entity.getMaxHealth(), this.health + 1.0));
+                logger.debug("エージェント " + agentName + " の緊急体力回復を実行しました");
+            }
         } else {
             this.health = 0;
             this.foodLevel = 0;
